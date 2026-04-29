@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from typing import Generator, List
 
 from src.utils.hana_tags import SILENT_XML_TAGS, THOUGHT_TAGS
+from src.utils.text import sanitize_visible_response_text
 
 END_PUNCTUATION = {".", "!", "?", "...", "。", "！", "？"}
 COMMAS = {",", ";", "，", "、"}
@@ -160,6 +161,7 @@ class SentenceDivider:
         clean_text = re.sub(r"\[EMOTION:\w+\]", "", text_base, flags=re.IGNORECASE).strip()
         clean_text = re.sub(r"\[PARAM:[\w=.-]+\]", "", clean_text, flags=re.IGNORECASE).strip()
         clean_text = re.sub(r"\[INDEX_\d+\.\d+(?:,\s*INDEX_\d+\.\d+)*\]", "", clean_text).strip()
+        clean_text = sanitize_visible_response_text(clean_text)
 
         return SentenceChunk(
             text=clean_text,
@@ -170,7 +172,6 @@ class SentenceDivider:
 
     def _flush(self) -> Generator[SentenceChunk, None, None]:
         if self._mode == "tag" and self._tag_buffer:
-            self._append_visible_text(self._tag_buffer)
             self._tag_buffer = ""
             self._mode = "visible"
 

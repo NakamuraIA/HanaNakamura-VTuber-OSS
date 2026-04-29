@@ -7,16 +7,30 @@ from __future__ import annotations
 import logging
 import os
 import re
+import sys
 import threading
 
 from src.config.config_loader import CONFIG
 from src.core.provider_catalog import get_tts_providers
+from src.modules.voice import speech_state
 
 logger = logging.getLogger(__name__)
 
 _swap_lock = threading.Lock()
 _play_lock = threading.Lock()
 _instancia_ativa = None
+
+
+def _get_main_signals():
+    """Tenta obter o objeto 'signals' do módulo principal sem causar ImportError."""
+    try:
+        # Quando main.py é executado diretamente, __main__ tem o objeto signals
+        main_mod = sys.modules.get("__main__")
+        if main_mod and hasattr(main_mod, "signals"):
+            return main_mod.signals
+    except Exception:
+        pass
+    return None
 
 
 def _ensure_tts_settings() -> dict:
@@ -118,7 +132,7 @@ class TTSWrapper:
 
     def falar(self, texto: str, tocar_local=True) -> bool:
         if re.search(r'\{.*"acao".*\}', texto, re.DOTALL) or re.search(
-            r"function_call|gerar_ou_editar_imagem|gerar_imagem|editar_imagem|gerar_musica|acao_pc|<tool_code>|```",
+            r"function_call|gerar_ou_editar_imagem|gerar_imagem|editar_imagem|gerar_imagem_personagem|editar_imagem_personagem|gerar_musica|acao_pc|<tool_code>|```",
             texto,
         ):
             return True
@@ -129,7 +143,20 @@ class TTSWrapper:
                     instancia = self._instanciar(prov)
                     if hasattr(instancia, "config_valida") and not instancia.config_valida:
                         continue
-                    sucesso = instancia.falar(texto, tocar_local)
+                    
+                    # Sinaliza fala para integrações como VTube Studio, inclusive via API/Tauri.
+                    _signals = _get_main_signals()
+                    speech_state.set_speaking(True)
+                    if _signals is not None:
+                        _signals.HANA_SPEAKING = True
+                    
+                    try:
+                        sucesso = instancia.falar(texto, tocar_local)
+                    finally:
+                        speech_state.set_speaking(False)
+                        if _signals is not None:
+                            _signals.HANA_SPEAKING = False
+
                     if sucesso:
                         self.provedor = prov
                         return True
@@ -139,6 +166,7 @@ class TTSWrapper:
             return False
 
     def parar(self) -> bool:
+        speech_state.set_speaking(False)
         stopped = False
         for instancia in list(self.instancias.values()):
             try:

@@ -41,12 +41,11 @@ MODEL_CATALOG: tuple[ModelSpec, ...] = (
     ModelSpec("openai/gpt-oss-120b", "GPT OSS 120B", "groq", "groq_api", "gpt-oss", 131072, "medium"),
     ModelSpec("qwen/qwen3-32b", "Qwen3 32B", "groq", "groq_api", "qwen", 131072, "fast", preview=True),
     # Google / Gemini
-    ModelSpec("gemini-3.1-pro-preview", "Gemini 3.1 Pro Preview", "google_cloud", "vertex_or_gemini_api", "gemini", 1048576, "medium", supports_vision=True, preview=True),
-    ModelSpec("gemini-3.1-flash-preview", "Gemini 3.1 Flash Preview", "google_cloud", "vertex_or_gemini_api", "gemini", 1048576, "fast", supports_vision=True, preview=True),
-    ModelSpec("gemini-3.1-flash-lite-preview", "Gemini 3.1 Flash Lite Preview", "google_cloud", "vertex_or_gemini_api", "gemini", 1048576, "fast", supports_vision=True, preview=True),
-    ModelSpec("gemini-2.5-pro", "Gemini 2.5 Pro", "google_cloud", "vertex_or_gemini_api", "gemini", 1048576, "medium", supports_vision=True),
     ModelSpec("gemini-2.5-flash", "Gemini 2.5 Flash", "google_cloud", "vertex_or_gemini_api", "gemini", 1048576, "fast", supports_vision=True),
     ModelSpec("gemini-2.5-flash-lite", "Gemini 2.5 Flash Lite", "google_cloud", "vertex_or_gemini_api", "gemini", 1048576, "fast", supports_vision=True),
+    ModelSpec("gemini-2.5-pro", "Gemini 2.5 Pro", "google_cloud", "vertex_or_gemini_api", "gemini", 1048576, "medium", supports_vision=True),
+    ModelSpec("gemini-3-flash-preview", "Gemini 3 Flash Preview", "google_cloud", "vertex_or_gemini_api", "gemini", 1048576, "fast", supports_vision=True, preview=True),
+    ModelSpec("gemini-3-pro-preview", "Gemini 3 Pro Preview", "google_cloud", "vertex_or_gemini_api", "gemini", 1048576, "medium", supports_vision=True, preview=True),
     # Cerebras
     ModelSpec("gpt-oss-120b", "GPT OSS 120B", "cerebras", "cerebras_api", "gpt-oss", 131072, "fast"),
     ModelSpec("gpt-oss-20b", "GPT OSS 20B", "cerebras", "cerebras_api", "gpt-oss", 131072, "fast"),
@@ -77,12 +76,13 @@ MODEL_CATALOG: tuple[ModelSpec, ...] = (
     ModelSpec("openai/o4-mini", "OpenAI o4 Mini", "openrouter", "openrouter_api", "o-series", 200000, "fast"),
     ModelSpec("openai/gpt-oss-20b", "OpenAI GPT OSS 20B", "openrouter", "openrouter_api", "gpt-oss", 131072, "fast"),
     ModelSpec("openai/gpt-oss-120b", "OpenAI GPT OSS 120B", "openrouter", "openrouter_api", "gpt-oss", 131072, "medium"),
-    ModelSpec("google/gemini-3.1-pro-preview", "Gemini 3.1 Pro Preview", "openrouter", "openrouter_api", "gemini", 1048576, "medium", supports_vision=True, preview=True),
-    ModelSpec("google/gemini-3.1-flash-preview", "Gemini 3.1 Flash Preview", "openrouter", "openrouter_api", "gemini", 1048576, "fast", supports_vision=True, preview=True),
-    ModelSpec("google/gemini-3.1-flash-lite-preview", "Gemini 3.1 Flash Lite Preview", "openrouter", "openrouter_api", "gemini", 1048576, "fast", supports_vision=True, preview=True),
-    ModelSpec("google/gemini-2.5-pro", "Gemini 2.5 Pro", "openrouter", "openrouter_api", "gemini", 1048576, "medium", supports_vision=True),
     ModelSpec("google/gemini-2.5-flash", "Gemini 2.5 Flash", "openrouter", "openrouter_api", "gemini", 1048576, "fast", supports_vision=True),
     ModelSpec("google/gemini-2.5-flash-lite", "Gemini 2.5 Flash Lite", "openrouter", "openrouter_api", "gemini", 1048576, "fast", supports_vision=True),
+    ModelSpec("google/gemini-2.5-pro", "Gemini 2.5 Pro", "openrouter", "openrouter_api", "gemini", 1048576, "medium", supports_vision=True),
+    ModelSpec("google/gemini-3-flash-preview", "Gemini 3 Flash Preview", "openrouter", "openrouter_api", "gemini", 1048576, "fast", supports_vision=True, preview=True),
+    ModelSpec("google/gemini-3-pro-preview", "Gemini 3 Pro Preview", "openrouter", "openrouter_api", "gemini", 1048576, "medium", supports_vision=True, preview=True),
+    ModelSpec("google/gemini-3.1-flash-lite-preview", "Gemini 3.1 Flash Lite Preview", "openrouter", "openrouter_api", "gemini", 1048576, "fast", supports_vision=True, preview=True),
+    ModelSpec("google/gemini-3.1-pro-preview", "Gemini 3.1 Pro Preview", "openrouter", "openrouter_api", "gemini", 1048576, "medium", supports_vision=True, preview=True),
     ModelSpec("x-ai/grok-4-fast", "Grok 4 Fast", "openrouter", "openrouter_api", "grok", 2000000, "fast", supports_vision=True),
     ModelSpec("x-ai/grok-4", "Grok 4", "openrouter", "openrouter_api", "grok", 256000, "medium", supports_vision=True),
     ModelSpec("x-ai/grok-4.1-fast", "Grok 4.1 Fast", "openrouter", "openrouter_api", "grok", 2000000, "fast", supports_vision=True),
@@ -168,6 +168,31 @@ VOICE_CATALOG: tuple[VoiceSpec, ...] = (
 )
 
 
+MODEL_ALIASES: dict[str, dict[str, str]] = {
+    "google_cloud": {
+        "gemini-3.1-pro-preview": "gemini-3-pro-preview",
+        "gemini-3.1-flash-preview": "gemini-3-flash-preview",
+        "gemini-3.1-flash-lite-preview": "gemini-2.5-flash-lite",
+        "gemini-3-flash-lite-preview": "gemini-2.5-flash-lite",
+        "gemini-2.5-flash-preview-04-17": "gemini-2.5-flash",
+        "gemini-2.5-flash-preview-05-20": "gemini-2.5-flash",
+        "gemini-2.5-flash-lite-preview-06-17": "gemini-2.5-flash-lite",
+        "gemini-2.5-pro-preview-03-25": "gemini-2.5-pro",
+        "gemini-2.5-pro-preview-05-06": "gemini-2.5-pro",
+        "gemini-2.5-pro-preview-06-05": "gemini-2.5-pro",
+    },
+    "openrouter": {
+        "google/gemini-3.1-flash-preview": "google/gemini-3-flash-preview",
+        "google/gemini-3.1-flash-image-preview": "google/gemini-3.1-flash-image-preview",
+        "google/gemini-2.5-flash-preview-04-17": "google/gemini-2.5-flash",
+        "google/gemini-2.5-flash-lite-preview-06-17": "google/gemini-2.5-flash-lite",
+        "google/gemini-2.5-pro-preview-03-25": "google/gemini-2.5-pro",
+        "google/gemini-2.5-pro-preview-05-06": "google/gemini-2.5-pro",
+        "google/gemini-2.5-pro-preview-06-05": "google/gemini-2.5-pro",
+    },
+}
+
+
 def get_llm_providers() -> list[str]:
     return ["groq", "google_cloud", "cerebras", "openrouter", "openai"]
 
@@ -211,6 +236,26 @@ def find_model(provider: str, model_id: str | None) -> ModelSpec | None:
         if model.provider == provider_key and model.id == model_key:
             return model
     return None
+
+
+def normalize_model_id(provider: str, model_id: str | None, *, vision_only: bool = False) -> str:
+    provider_key = (provider or "").strip().lower()
+    requested = str(model_id or "").strip()
+    if not requested:
+        return get_default_model(provider_key, vision_only=vision_only)
+
+    normalized = MODEL_ALIASES.get(provider_key, {}).get(requested, requested)
+    exact = find_model(provider_key, normalized)
+    if exact and (exact.supports_vision or not vision_only):
+        return exact.id
+
+    lowered = normalized.lower()
+    for model in get_models_for_provider(provider_key, vision_only=vision_only, include_inactive=True):
+        if model.id.lower() == lowered:
+            return model.id
+
+    fallback = get_default_model(provider_key, vision_only=vision_only)
+    return fallback or normalized
 
 
 def get_voices_for_provider(provider: str) -> list[VoiceSpec]:

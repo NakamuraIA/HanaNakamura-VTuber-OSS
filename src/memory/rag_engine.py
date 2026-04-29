@@ -214,6 +214,46 @@ class HanaRAGEngine:
             logger.error("[RAG ENGINE] Erro na consulta RAG: %s", exc)
             return self._fallback_query(query_text, n_results)
 
+    def get_all_memories(self) -> List[Dict[str, Any]]:
+        """Retorna todas as memórias salvas no RAG para listagem."""
+        if self.collection is None:
+            return [{"id": k, "text": v.get("text", ""), "metadata": v.get("metadata", {})} for k, v in self._fallback_entries.items()]
+            
+        try:
+            results = self.collection.get()
+            ids = results.get("ids", [])
+            documents = results.get("documents", [])
+            metadatas = results.get("metadatas", [])
+            
+            memories = []
+            for i in range(len(ids)):
+                memories.append({
+                    "id": ids[i],
+                    "text": documents[i],
+                    "metadata": metadatas[i] if metadatas and i < len(metadatas) else {}
+                })
+            return memories
+        except Exception as exc:
+            logger.error("[RAG ENGINE] Erro ao listar memorias RAG: %s", exc)
+            return []
+
+    def delete_memory(self, mem_id: str) -> bool:
+        """Remove uma memória pelo ID."""
+        if self.collection is None:
+            if mem_id in self._fallback_entries:
+                del self._fallback_entries[mem_id]
+                self._save_fallback_entries()
+                return True
+            return False
+            
+        try:
+            self.collection.delete(ids=[mem_id])
+            logger.info(f"[RAG ENGINE] Memória removida (ID: {mem_id})")
+            return True
+        except Exception as exc:
+            logger.error(f"[RAG ENGINE] Erro ao remover memória (ID: {mem_id}): {exc}")
+            return False
+
     def get_context_string(self, query_text: str, n_results: int = 3) -> str:
         """Retorna uma string formatada com as memorias recuperadas."""
         memories = self.query_memories(query_text, n_results)

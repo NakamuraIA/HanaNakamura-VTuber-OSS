@@ -12,6 +12,9 @@ import threading
 import time
 from typing import Dict, Optional
 
+from src.config.config_loader import CONFIG
+from src.modules.voice import speech_state
+
 logger = logging.getLogger(__name__)
 
 try:
@@ -31,7 +34,7 @@ class VTSController:
     HEARTBEAT_SECONDS = 4.0
     ANIMATION_SECONDS = 0.05
 
-    def __init__(self, host: str = "localhost", port: int = 8001, emotion_map: Dict[str, str] = None, signals=None):
+    def __init__(self, host: str = "127.0.0.1", port: int = 8001, emotion_map: Dict[str, str] = None, signals=None):
         self.host = host
         self.port = int(port)
         self.emotion_map = emotion_map or {}
@@ -44,6 +47,7 @@ class VTSController:
         self.reconnect_attempts = 0
         self.tracking_mode = "injected_face_tracking"
         self.mouth_parameter = ""
+        self.eye_parameters = ""
         self._last_error = ""
         self._last_expression = ""
         self._mouth_level = 0.0
@@ -58,11 +62,31 @@ class VTSController:
         self._available_hotkeys: list = []
         self._available_expressions: list = []
         self._available_parameters: list = []
+        self._input_param_specs: Dict[str, Dict[str, float]] = {}
+        self._input_param_ids: set[str] = set()
+        self._model_param_ids: set[str] = set()
         self._supported_param_ids: set[str] = set()
         self._current_params: Dict[str, float] = {}
         self._tracking_active = True
         self._should_run = True
+        self._lock = None # Criado dentro do loop asyncio
         self._write_state(status="idle")
+
+    async def _request(self, request_msg):
+        """Wrapper protegido por Lock para todos os pedidos ao VTube Studio."""
+        if not self._vts or not self._lock:
+            return None
+        async with self._lock:
+            try:
+                response = await self._vts.request(request_msg)
+                if isinstance(response, dict) and response.get("messageType") == "APIError":
+                    data = response.get("data") or {}
+                    message = data.get("message") or data.get("error") or response
+                    raise RuntimeError(f"VTube Studio APIError: {message}")
+                return response
+            except Exception as e:
+                logger.error("[VTS] Erro no request: %s", e)
+                raise e
 
     def _state_payload(self, status: str | None = None, last_error: str | None = None):
         return {
@@ -77,7 +101,12 @@ class VTSController:
             "last_heartbeat_at": self.last_heartbeat_at,
             "reconnect_attempts": self.reconnect_attempts,
             "mouth_parameter": self.mouth_parameter,
+            "eye_parameters": self.eye_parameters,
             "tracking_mode": self.tracking_mode,
+            "input_parameters": len(self._input_param_ids),
+            "model_parameters": len(self._model_param_ids),
+            "mouth_level": round(self._mouth_level, 3),
+            "speaking": speech_state.is_speaking(self.signals),
             "last_error": last_error if last_error is not None else self._last_error,
             "last_expression": self._last_expression,
         }
@@ -124,6 +153,7 @@ class VTSController:
     def _run_loop(self):
         self._loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self._loop)
+        self._lock = asyncio.Lock()
         self._supervisor_task = self._loop.create_task(self._supervisor_loop())
         try:
             self._loop.run_forever()
@@ -148,8 +178,15 @@ class VTSController:
 
     async def _supervisor_loop(self):
         backoff = 1.0
+        logger.info("[VTS] Supervisor loop iniciado.")
         while self._should_run:
+            if not CONFIG.get("VTUBESTUDIO_ATIVO", False):
+                self._write_state(status="disabled")
+                await asyncio.sleep(2.0)
+                continue
+
             try:
+                logger.info("[VTS] Tentando conectar a %s:%s...", self.host, self.port)
                 await self._connect_and_auth()
                 await self._load_available_actions()
                 self._detect_mouth_parameter()
@@ -209,38 +246,55 @@ class VTSController:
         }
 
         self._vts = pyvts.vts(plugin_info=plugin_info, vts_api_info=api_info)
-        await self._vts.connect()
+        
+        try:
+            logger.info("[VTS] Abrindo WebSocket em %s:%s...", self.host, self.port)
+            await self._vts.connect()
+        except Exception as e:
+            logger.error("[VTS] Falha no WebSocket. VTube Studio aberto? API 8001 ON? : %s", e)
+            raise e
+
         self.connected = True
         self._write_state(status="connected", last_error="")
-        logger.info("[VTS] Conectado ao VTube Studio em %s:%s", self.host, self.port)
 
         token = self._read_token_file()
         if token:
             try:
-                await self._vts.request_authenticate(token)
-                self.authenticated = True
-                self._write_state(status="authenticated", last_error="")
-                logger.info("[VTS] Autenticado com token salvo.")
-                return
+                # Na API atual, passamos o token no request de autenticação
+                response = await self._request(self._vts.vts_request.authentication(token))
+                if response and response.get("data", {}).get("authenticated"):
+                    self.authenticated = True
+                    self._vts.authentic_token = token
+                    self._write_state(status="authenticated", last_error="")
+                    logger.info("[VTS] Autenticado com token salvo.")
+                    return
+                else:
+                    logger.warning("[VTS] Token salvo rejeitado pelo VTube Studio.")
+                    token = None
             except Exception as e:
-                logger.warning("[VTS] Token salvo inválido, solicitando novo: %s", e)
+                logger.warning("[VTS] Erro ao usar token salvo: %s", e)
                 token = None
 
+        logger.info("[VTS] Solicitando autorização no VTube Studio (veja o popup no app)...")
         self._write_state(status="awaiting_auth", last_error="")
-        response = await self._vts.request_authenticate_token(force=True)
-        if isinstance(response, str):
-            token = response
-        elif isinstance(response, dict):
-            token = response.get("data", {}).get("authenticationToken")
+        
+        # 1. Solicita Token (Gera popup no VTS)
+        response_token = await self._request(self._vts.vts_request.authentication_token())
+        token = response_token.get("data", {}).get("authenticationToken")
 
         if not token:
-            raise RuntimeError("token de autenticação não recebido")
+            raise RuntimeError("Token de autenticação não recebido. Você clicou em 'Allow'?")
 
-        self._write_token_file(token)
-        await self._vts.request_authenticate(token)
-        self.authenticated = True
-        self._write_state(status="authenticated", last_error="")
-        logger.info("[VTS] Novo token obtido e autenticado com sucesso.")
+        # 2. Autentica com o novo token
+        response_auth = await self._request(self._vts.vts_request.authentication(token))
+        if response_auth and response_auth.get("data", {}).get("authenticated"):
+            self._write_token_file(token)
+            self._vts.authentic_token = token
+            self.authenticated = True
+            self._write_state(status="authenticated", last_error="")
+            logger.info("[VTS] Autenticado com novo token.")
+        else:
+            raise RuntimeError("Falha na autenticação mesmo com novo token.")
 
     def _read_token_file(self):
         if not os.path.exists(self.TOKEN_PATH):
@@ -256,69 +310,121 @@ class VTSController:
         with open(self.TOKEN_PATH, "w", encoding="utf-8") as f:
             f.write(str(token))
 
+    @staticmethod
+    def _safe_float(value, default: float) -> float:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    def _register_input_parameter(self, item) -> None:
+        if isinstance(item, dict):
+            name = str(item.get("name") or item.get("id") or "").strip()
+            minimum = self._safe_float(item.get("min"), -1000000.0)
+            maximum = self._safe_float(item.get("max"), 1000000.0)
+            default = self._safe_float(item.get("defaultValue"), 0.0)
+        else:
+            name = str(item or "").strip()
+            minimum = -1000000.0
+            maximum = 1000000.0
+            default = 0.0
+            item = {"name": name, "min": minimum, "max": maximum, "defaultValue": default}
+
+        if not name:
+            return
+        self._input_param_ids.add(name)
+        self._supported_param_ids.add(name)
+        self._input_param_specs[name] = {"min": minimum, "max": maximum, "default": default}
+        self._available_parameters.append(item)
+
+    def _register_model_parameter(self, item) -> None:
+        if isinstance(item, dict):
+            name = str(item.get("name") or item.get("id") or "").strip()
+        else:
+            name = str(item or "").strip()
+        if name:
+            self._model_param_ids.add(name)
+
+    def _clamp_param_value(self, name: str, value: float) -> float:
+        spec = self._input_param_specs.get(name, {})
+        minimum = spec.get("min", -1000000.0)
+        maximum = spec.get("max", 1000000.0)
+        parsed = self._safe_float(value, spec.get("default", 0.0))
+        return max(minimum, min(maximum, parsed))
+
     async def _load_available_actions(self):
         self._available_hotkeys = []
         self._available_expressions = []
         self._available_parameters = []
+        self._input_param_specs = {}
+        self._input_param_ids = set()
+        self._model_param_ids = set()
         self._supported_param_ids = set()
 
         try:
-            response = await self._vts.request(self._vts.vts_request.requestHotKeyList())
+            response = await self._request(self._vts.vts_request.requestHotKeyList())
             if response and "data" in response:
                 self._available_hotkeys = response["data"].get("availableHotkeys", [])
         except Exception as e:
             logger.warning("[VTS] Erro ao carregar hotkeys: %s", e)
 
         try:
-            response = await self._vts.request(self._vts.vts_request.requestExpressionState())
+            # Em pyvts 0.3.3, usamos BaseRequest para ExpressionStateRequest
+            response = await self._request(self._vts.vts_request.BaseRequest("ExpressionStateRequest", {}))
             if response and "data" in response:
                 self._available_expressions = response["data"].get("expressions", [])
         except Exception as e:
             logger.warning("[VTS] Erro ao carregar expressões: %s", e)
 
-        for request in (
-            self._vts.vts_request.requestTrackingParameterList(),
-            self._vts.vts_request.BaseRequest("CurrentModelRequest", {}),
-        ):
-            try:
-                response = await self._vts.request(request)
-            except Exception:
-                continue
-            if not response or "data" not in response:
-                continue
-            for key in ("modelParameters", "parameters", "trackingParameters", "availableParameters"):
-                values = response["data"].get(key)
+        try:
+            response = await self._request(self._vts.vts_request.requestTrackingParameterList())
+            data = response.get("data", {}) if isinstance(response, dict) else {}
+            for key in ("defaultParameters", "customParameters", "trackingParameters", "availableParameters", "parameters"):
+                values = data.get(key)
                 if isinstance(values, list):
-                    self._available_parameters.extend(values)
+                    for item in values:
+                        self._register_input_parameter(item)
+        except Exception as e:
+            logger.warning("[VTS] Erro ao carregar parametros de tracking: %s", e)
 
-        for item in self._available_parameters:
-            if isinstance(item, dict):
-                candidate = item.get("id") or item.get("name")
-            else:
-                candidate = str(item)
-            if candidate:
-                self._supported_param_ids.add(candidate)
+        try:
+            response = await self._request(self._vts.vts_request.BaseRequest("CurrentModelRequest", {}))
+            data = response.get("data", {}) if isinstance(response, dict) else {}
+            for key in ("modelParameters", "live2DParameters"):
+                values = data.get(key)
+                if isinstance(values, list):
+                    for item in values:
+                        self._register_model_parameter(item)
+        except Exception as e:
+            logger.debug("[VTS] Modelo atual sem lista de parametros Live2D: %s", e)
+        
+        if self._supported_param_ids:
+            logger.info(
+                "[VTS] %d parametros de tracking detectados: %s",
+                len(self._supported_param_ids),
+                list(self._supported_param_ids)[:20],
+            )
 
     def _detect_mouth_parameter(self):
         priorities = [
-            "ParamMouthOpenY",
-            "ParamMouthOpen",
-            "ParamMouthSmile",
-            "ParamMouthA",
-            "ParamJawOpen",
+            "MouthOpen",
+            "VoiceVolumePlusMouthOpen",
+            "VoiceVolume",
+            "VoiceA",
         ]
         self.mouth_parameter = ""
         for candidate in priorities:
             if candidate in self._supported_param_ids:
                 self.mouth_parameter = candidate
                 break
-        if not self.mouth_parameter:
-            self.mouth_parameter = "ParamMouthOpenY"
+        self.eye_parameters = ""
+        if {"EyeOpenLeft", "EyeOpenRight"}.issubset(self._supported_param_ids):
+            self.eye_parameters = "EyeOpenLeft,EyeOpenRight"
 
     async def _heartbeat_loop(self):
         while self._should_run and self.connected and self.authenticated:
             try:
-                await self._vts.request(self._vts.vts_request.requestHotKeyList())
+                await self._request(self._vts.vts_request.requestHotKeyList())
                 self.last_heartbeat_at = time.time()
                 self._write_state(status="ready", last_error="")
             except Exception as e:
@@ -332,6 +438,9 @@ class VTSController:
         t = 0.0
         target_x, target_y = 0.0, 0.0
         current_x, current_y = 0.0, 0.0
+        gesture_until = 0.0
+        gesture_side = "right"
+        gesture_seed = 0.0
 
         while self._should_run and self.connected and self.authenticated:
             t += 0.05
@@ -342,40 +451,110 @@ class VTSController:
             current_x += (target_x - current_x) * 0.1
             current_y += (target_y - current_y) * 0.1
             angle_z = math.sin(t * 0.5) * 4
-            breath = (math.sin(t * 1.5) + 1) / 2
-            is_speaking = bool(self.signals and getattr(self.signals, "HANA_SPEAKING", False))
+            is_speaking = speech_state.is_speaking(self.signals)
 
             eye_open = 1.0
-            if random.random() < 0.02 or (t % 4.0 < 0.15):
+            if t > 3.0 and random.random() < 0.012:
                 eye_open = 0.0
 
-            mouth_target = 0.72 if is_speaking else 0.0
-            self._mouth_level += (mouth_target - self._mouth_level) * 0.25
-            mouth_value = self._mouth_level
             if is_speaking:
-                mouth_value = max(0.0, min(1.0, mouth_value + ((math.sin(t * 10) + 1) / 2) * 0.12))
+                syllable = (math.sin(t * 27.0) + 1.0) / 2.0
+                micro = max(0.0, math.sin(t * 43.0 + 1.1)) ** 2.4
+                phrase = 0.9 + ((math.sin(t * 3.4 + 0.5) + 1.0) / 2.0) * 0.12
+                mouth_target = min(0.56, (0.055 + (syllable ** 1.18) * 0.34 + micro * 0.12) * phrase)
+                response = 0.92 if mouth_target > self._mouth_level else 0.82
+            else:
+                mouth_target = 0.0
+                response = 0.55
+
+            self._mouth_level += (mouth_target - self._mouth_level) * response
+            mouth_value = max(0.0, min(0.62, self._mouth_level))
+
+            body_energy = 1.0 if is_speaking else 0.32
+            body_angle_x = math.sin(t * 1.15) * 1.4 * body_energy
+            body_angle_y = math.sin(t * 0.9 + 1.2) * 0.9 * body_energy
+            body_angle_z = math.sin(t * 1.35 + 0.4) * 1.8 * body_energy
+            body_position_y = math.sin(t * 1.4) * 0.035 * body_energy
+            body_position_z = math.sin(t * 1.1 + 0.6) * 0.04 * body_energy
+            face_position_y = math.sin(t * 1.6 + 0.2) * 0.22 * body_energy
+            face_position_z = math.sin(t * 1.2 + 0.7) * 0.18 * body_energy
+            brow_value = min(0.52, 0.08 + mouth_value * 0.42 + (0.05 * math.sin(t * 6.0) if is_speaking else 0.0))
+            smile_value = 0.42 + (0.16 if is_speaking else 0.05) + math.sin(t * 1.8) * 0.035
+
+            if is_speaking and t >= gesture_until and random.random() < 0.025:
+                gesture_until = t + random.uniform(1.0, 1.8)
+                gesture_side = "right" if random.random() < 0.62 else "left"
+                gesture_seed = random.uniform(0.0, math.tau)
+            gesture_active = is_speaking and t < gesture_until
+            gesture_phase = math.sin((t + gesture_seed) * 8.0)
+            hand_found = 1.0 if is_speaking else 0.0
+            left_boost = 1.0 if gesture_active and gesture_side == "left" else 0.35
+            right_boost = 1.0 if gesture_active and gesture_side == "right" else 0.45
 
             params = {
-                "ParamAngleX": current_x,
-                "ParamAngleY": current_y + (math.sin(t * 4) * 1.2 if is_speaking else 0.0),
-                "ParamAngleZ": angle_z,
-                "ParamBreath": breath,
-                "ParamEyeLOpen": eye_open,
-                "ParamEyeROpen": eye_open,
-                "ParamEyeBallX": current_x / 15.0,
-                "ParamEyeBallY": current_y / 10.0,
+                "FaceAngleX": current_x,
+                "FaceAngleY": current_y + (math.sin(t * 4) * 2.5 if is_speaking else 0.0),
+                "FaceAngleZ": angle_z + (math.sin(t * 6) * 1.5 if is_speaking else 0.0),
+                "FacePositionX": math.sin(t * 0.85) * 0.12 * body_energy,
+                "FacePositionY": face_position_y,
+                "FacePositionZ": face_position_z,
+                "EyeOpenLeft": eye_open,
+                "EyeOpenRight": eye_open,
+                "EyeLeftX": current_x / 15.0,
+                "EyeLeftY": current_y / 10.0,
+                "EyeRightX": current_x / 15.0,
+                "EyeRightY": current_y / 10.0,
+                "MouthOpen": mouth_value,
+                "MouthSmile": smile_value,
+                "MouthX": math.sin(t * 13.0) * 0.05 * mouth_value if is_speaking else 0.0,
+                "Brows": brow_value,
+                "BrowLeftY": brow_value + (0.04 * math.sin(t * 7.0) if is_speaking else 0.0),
+                "BrowRightY": brow_value + (0.04 * math.sin(t * 6.5 + 1.2) if is_speaking else 0.0),
+                "CheekPuff": 0.02 + mouth_value * 0.06 if is_speaking else 0.0,
+                "VoiceVolume": mouth_value,
+                "VoiceVolumePlusMouthOpen": mouth_value,
+                "VoiceFrequency": 0.55 + (math.sin(t * 13.0) * 0.08 if is_speaking else 0.0),
+                "VoiceFrequencyPlusMouthSmile": 0.5 + (math.sin(t * 13.0) * 0.08 if is_speaking else 0.0),
+                "VoiceA": mouth_value if is_speaking else 0.0,
+                "VoiceI": max(0.0, math.sin(t * 19.0)) * mouth_value if is_speaking else 0.0,
+                "VoiceU": max(0.0, math.sin(t * 13.0 + 1.0)) * mouth_value if is_speaking else 0.0,
+                "VoiceE": max(0.0, math.sin(t * 17.0 + 2.0)) * mouth_value if is_speaking else 0.0,
+                "VoiceO": max(0.0, math.sin(t * 11.0 + 3.0)) * mouth_value if is_speaking else 0.0,
+                "VoiceSilence": 0.0 if is_speaking else 1.0,
+                "MocopiBodyAngleX": body_angle_x,
+                "MocopiBodyAngleY": body_angle_y,
+                "MocopiBodyAngleZ": body_angle_z,
+                "MocopiBodyPositionX": math.sin(t * 0.75) * 0.025 * body_energy,
+                "MocopiBodyPositionY": body_position_y,
+                "MocopiBodyPositionZ": body_position_z,
+                "ControllerShoulderLeft": max(0.0, min(1.0, 0.18 + mouth_value * 0.22 + math.sin(t * 3.0) * 0.04)),
+                "ControllerShoulderRight": max(0.0, min(1.0, 0.2 + mouth_value * 0.24 + math.sin(t * 3.4 + 0.7) * 0.04)),
+                "HandLeftFound": hand_found,
+                "HandRightFound": hand_found,
+                "BothHandsFound": hand_found,
+                "HandDistance": 3.4 + math.sin(t * 1.6) * 0.25 if is_speaking else 0.0,
+                "HandLeftPositionX": 3.0 + math.sin(t * 1.7) * 0.18 if is_speaking else 0.0,
+                "HandLeftPositionY": -1.8 + left_boost * (0.6 + gesture_phase * 0.35) if is_speaking else 0.0,
+                "HandLeftPositionZ": 0.15 + left_boost * math.sin(t * 2.5 + 0.4) * 0.28 if is_speaking else 0.0,
+                "HandRightPositionX": 7.0 + math.sin(t * 1.9 + 1.0) * 0.18 if is_speaking else 0.0,
+                "HandRightPositionY": -1.7 + right_boost * (0.65 + gesture_phase * 0.38) if is_speaking else 0.0,
+                "HandRightPositionZ": 0.15 + right_boost * math.sin(t * 2.7 + 1.1) * 0.28 if is_speaking else 0.0,
+                "HandLeftAngleX": -10.0 + left_boost * math.sin(t * 4.6 + gesture_seed) * 18.0 if is_speaking else 0.0,
+                "HandLeftAngleZ": -8.0 + left_boost * math.sin(t * 5.2 + 0.5) * 16.0 if is_speaking else 0.0,
+                "HandRightAngleX": 10.0 + right_boost * math.sin(t * 4.9 + gesture_seed) * 18.0 if is_speaking else 0.0,
+                "HandRightAngleZ": 8.0 + right_boost * math.sin(t * 5.0 + 1.2) * 16.0 if is_speaking else 0.0,
+                "HandLeftOpen": 0.58 + left_boost * 0.22 if is_speaking else 0.0,
+                "HandRightOpen": 0.62 + right_boost * 0.24 if is_speaking else 0.0,
             }
-            if self.mouth_parameter:
-                params[self.mouth_parameter] = mouth_value
-
             await self._send_multi_parameters(params)
             await asyncio.sleep(self.ANIMATION_SECONDS)
 
     async def _send_multi_parameters(self, params: Dict[str, float]):
-        if not self._vts:
-            return
-
-        supported = {key: value for key, value in params.items() if not self._supported_param_ids or key in self._supported_param_ids}
+        supported = {
+            key: self._clamp_param_value(key, value)
+            for key, value in params.items()
+            if key in self._supported_param_ids
+        }
         if not supported:
             return
 
@@ -385,7 +564,7 @@ class VTSController:
             face_found=True,
             mode="set",
         )
-        await self._vts.request(request)
+        await self._request(request)
         self._current_params.update(supported)
 
     async def _safe_disconnect(self):
@@ -411,10 +590,11 @@ class VTSController:
 
     async def _send_parameter(self, name: str, value: float):
         try:
-            if self._supported_param_ids and name not in self._supported_param_ids:
+            if name not in self._supported_param_ids:
                 return
+            value = self._clamp_param_value(name, value)
             request = self._vts.vts_request.requestSetParameterValue(name, value, face_found=True, mode="set")
-            await self._vts.request(request)
+            await self._request(request)
             self._current_params[name] = value
         except Exception as e:
             logger.error("[VTS] Erro ao definir parâmetro %s: %s", name, e)
@@ -436,7 +616,7 @@ class VTSController:
 
         try:
             if hotkey_id:
-                await self._vts.request(self._vts.vts_request.requestTriggerHotKey(hotkey_id))
+                await self._request(self._vts.vts_request.requestTriggerHotKey(hotkey_id))
                 self._last_expression = hotkey_name
                 self._write_state(status="ready", last_error="")
                 return
@@ -450,7 +630,7 @@ class VTSController:
                 file_name = expr.get("name", "")
                 if expression_name.lower() in file_name.lower():
                     request = self._vts.vts_request.requestExpressionActivation(file_name, active=True)
-                    await self._vts.request(request)
+                    await self._request(request)
                     self._last_expression = file_name
                     self._write_state(status="ready", last_error="")
                     asyncio.create_task(self._delayed_reset(5, express_file=file_name))
@@ -475,6 +655,22 @@ class VTSController:
             details.append(f"- Parametro de boca: {self.mouth_parameter}")
 
         p_list = []
+        preferred = {
+            "FaceAngleX",
+            "FaceAngleY",
+            "FaceAngleZ",
+            "MouthOpen",
+            "MouthSmile",
+            "MouthX",
+            "EyeOpenLeft",
+            "EyeOpenRight",
+            "EyeLeftX",
+            "EyeLeftY",
+            "EyeRightX",
+            "EyeRightY",
+            "VoiceVolume",
+            "VoiceVolumePlusMouthOpen",
+        }
         for p in self._available_parameters:
             if isinstance(p, dict):
                 name = p.get("name") or p.get("id", "")
@@ -484,13 +680,11 @@ class VTSController:
                 name = str(p)
                 min_val = "?"
                 max_val = "?"
-            if not str(name).startswith("Param"):
-                continue
-            if name in {"ParamAngleX", "ParamAngleY", "ParamAngleZ", "ParamBreath", "ParamEyeLOpen", "ParamEyeROpen"}:
+            if str(name) not in preferred:
                 continue
             p_list.append(f"{name} ({min_val} a {max_val})")
 
         if p_list:
-            details.append(f"- Parametros customizados: {', '.join(p_list)}")
+            details.append(f"- Parametros de tracking utilizaveis: {', '.join(p_list)}")
 
         return "\n".join(details)

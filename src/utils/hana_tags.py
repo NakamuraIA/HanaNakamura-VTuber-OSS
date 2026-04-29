@@ -12,6 +12,8 @@ SILENT_XML_TAGS = (
     "salvar_memoria",
     "gerar_imagem",
     "editar_imagem",
+    "gerar_imagem_personagem",
+    "editar_imagem_personagem",
     "gerar_musica",
     "acao_pc",
     "analisar_youtube",
@@ -25,6 +27,8 @@ DISPLAY_XML_TAGS = THOUGHT_TAGS + SILENT_XML_TAGS + LEGACY_IGNORED_XML_TAGS
 MEDIA_XML_TAGS = (
     "gerar_imagem",
     "editar_imagem",
+    "gerar_imagem_personagem",
+    "editar_imagem_personagem",
     "gerar_musica",
 )
 ASSISTANT_HISTORY_ROLES = {"hana", "assistant", "model", "ai"}

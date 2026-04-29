@@ -22,6 +22,14 @@ def test_parse_pc_action_payload_accepts_type_alias_for_type_text():
     assert request.payload["text"] == "hana"
 
 
+def test_parse_pc_action_payload_accepts_paste_alias_for_type_text():
+    request = pc_control.parse_pc_action_payload('{"action":"paste","text":"select 1;"}')
+
+    assert request.action == "type_text"
+    assert request.payload["text"] == "select 1;"
+    assert request.payload["method"] == "paste"
+
+
 def test_parse_pc_action_payload_accepts_open_notepad_alias():
     request = pc_control.parse_pc_action_payload('{"action":"open_notepad"}')
 
@@ -67,6 +75,7 @@ def test_execute_pc_action_kill_process_requires_target():
 def test_execute_pc_action_list_processes_formats_output(monkeypatch):
     class FakeProc:
         def __init__(self, pid, name):
+            self.pid = pid
             self.info = {"pid": pid, "name": name}
 
     monkeypatch.setattr(
@@ -83,6 +92,7 @@ def test_execute_pc_action_list_processes_formats_output(monkeypatch):
     assert result["ok"] is True
     assert result["count"] == 1
     assert "brave.exe" in result["content"]
+    assert "RAM" in result["content"]
 
 
 def test_execute_pc_action_move_mouse_supports_direction(monkeypatch):
@@ -131,6 +141,45 @@ def test_execute_pc_action_type_text_does_not_require_confirmation(monkeypatch):
     assert typed["text"] == "hana"
 
 
+def test_execute_pc_action_type_text_uses_clipboard_for_multiline(monkeypatch):
+    typed = {}
+
+    class KeyboardStub:
+        @staticmethod
+        def write(_text, delay=0):
+            raise AssertionError("texto multilinha deve usar clipboard")
+
+        @staticmethod
+        def press_and_release(key):
+            typed["hotkey"] = key
+
+    monkeypatch.setattr(pc_control, "keyboard", KeyboardStub())
+    monkeypatch.setattr(pc_control, "_focus_window_for_payload", lambda _payload: False)
+    monkeypatch.setattr(pc_control, "_set_clipboard_text", lambda text: typed.setdefault("clipboard", text))
+
+    result = pc_control.execute_pc_action(
+        {"action": "type_text", "text": "create table x (\n  id int\n);"},
+        confirm_callback=lambda _request: (_ for _ in ()).throw(AssertionError("confirmacao nao deveria ser chamada")),
+    )
+
+    assert result["ok"] is True
+    assert result["method"] == "clipboard"
+    assert typed["clipboard"].startswith("create table")
+    assert typed["hotkey"] == "ctrl+v"
+
+
+def test_focus_window_for_payload_preserves_current_window_when_target_is_stale(monkeypatch):
+    monkeypatch.setitem(pc_control._LAST_STARTED_PROCESS, "pid", 1234)
+    monkeypatch.setitem(pc_control._LAST_STARTED_PROCESS, "timestamp", 0.0)
+    monkeypatch.setattr(
+        pc_control,
+        "_find_window_handle",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("nao deve focar janela antiga")),
+    )
+
+    assert pc_control._focus_window_for_payload({"action": "type_text", "text": "hana"}) is False
+
+
 def test_parse_pc_action_payload_infers_set_volume_from_natural_language():
     request = pc_control.parse_pc_action_payload(
         {"action": "set_volume", "text": "diminui o som do PC"}
@@ -174,3 +223,41 @@ def test_execute_pc_action_start_process_does_not_require_confirmation(monkeypat
     assert result["ok"] is True
     assert result["pid"] == 4321
     assert launched["command"] == "notepad.exe"
+
+
+def test_parse_pc_action_payload_accepts_kill_target_alias():
+    request = pc_control.parse_pc_action_payload({"action": "kill_process", "target": "brave.exe"})
+
+    assert request.action == "kill_process"
+    assert request.payload["name"] == "brave.exe"
+
+
+def test_execute_pc_action_kill_process_rejects_generic_target():
+    result = pc_control.execute_pc_action(
+        {"action": "kill_process", "target": "tudo"},
+        confirm_callback=lambda _request: True,
+    )
+
+    assert result["ok"] is False
+    assert "generico" in result["message"].lower()
+
+
+def test_execute_pc_action_kill_process_blocks_hana_process(monkeypatch):
+    class FakeProc:
+        pid = 999
+        info = {"pid": 999, "name": "python.exe", "cmdline": ["python", "main.py"]}
+
+        def terminate(self):
+            raise AssertionError("processo protegido nao deveria ser encerrado")
+
+    monkeypatch.setattr(pc_control.psutil, "Process", lambda _pid: FakeProc())
+    monkeypatch.setattr(pc_control, "_is_hana_process", lambda _proc: True)
+    monkeypatch.setattr(pc_control, "_is_critical_process", lambda _proc: False)
+
+    result = pc_control.execute_pc_action(
+        {"action": "kill_process", "pid": 999},
+        confirm_callback=lambda _request: True,
+    )
+
+    assert result["ok"] is False
+    assert "protegido" in result["message"].lower()

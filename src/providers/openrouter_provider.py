@@ -9,6 +9,7 @@ from openai import OpenAI
 
 from src.brain.base_llm import BaseLLM
 from src.config.config_loader import CONFIG
+from src.core.provider_catalog import normalize_model_id
 
 logger = logging.getLogger(__name__)
 
@@ -17,10 +18,20 @@ class OpenRouterProvider(BaseLLM):
     def __init__(self):
         self.provedor = "openrouter"
         prov_cfg = CONFIG.get("LLM_PROVIDERS", {}).get(self.provedor, {})
-        self.modelo_chat = prov_cfg.get("modelo", prov_cfg.get("modelo_chat", "google/gemini-3.1-pro-preview"))
-        self.modelo_vision = prov_cfg.get("modelo_vision", "google/gemini-3.1-pro-preview")
-        self.modelo_fallback_vision = prov_cfg.get("modelo_vision", "google/gemini-3.1-pro-preview")
+        self.modelo_chat = normalize_model_id(
+            self.provedor,
+            prov_cfg.get("modelo", prov_cfg.get("modelo_chat", "google/gemini-2.5-flash")),
+        )
+        self.modelo_vision = normalize_model_id(
+            self.provedor,
+            prov_cfg.get("modelo_vision", "google/gemini-2.5-flash"),
+            vision_only=True,
+        )
+        self.modelo_fallback_vision = self.modelo_vision
         super().__init__()
+
+    def _normalize_model_id(self, model_id: str, vision: bool = False) -> str:
+        return normalize_model_id(self.provedor, model_id, vision_only=vision)
 
     def _criar_cliente(self):
         try:
@@ -42,11 +53,16 @@ class OpenRouterProvider(BaseLLM):
             return None
 
     def _prepare_messages(self, modelo, mensagens, image_b64: str = None):
-        modelo_exec = modelo
+        modelo_exec = normalize_model_id(self.provedor, modelo, vision_only=bool(image_b64))
+        if str(modelo).strip() != modelo_exec:
+            logger.warning("[OPENROUTER] Modelo invalido/antigo '%s' normalizado para '%s'.", modelo, modelo_exec)
         payload_messages = list(mensagens)
         if image_b64:
             prov_cfg = CONFIG.get("LLM_PROVIDERS", {}).get(self.provedor, {})
-            modelo_exec = prov_cfg.get("modelo_vision", modelo)
+            requested_vision = prov_cfg.get("modelo_vision", modelo)
+            modelo_exec = normalize_model_id(self.provedor, requested_vision, vision_only=True)
+            if str(requested_vision).strip() != modelo_exec:
+                logger.warning("[OPENROUTER] Modelo de visao invalido/antigo '%s' normalizado para '%s'.", requested_vision, modelo_exec)
             ultima_msg = payload_messages[-1]
             payload_messages[-1] = {
                 "role": "user",

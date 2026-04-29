@@ -5,6 +5,7 @@ Orquestrador e servicos de midia da Hana.
 from __future__ import annotations
 
 import datetime as _dt
+import json
 import logging
 import os
 import re
@@ -117,6 +118,47 @@ def _slugify_prompt(prompt: str, max_len: int = 60) -> str:
     slug = re.sub(r"[^\w\s-]", "", (prompt or "")[:max_len]).strip()
     slug = re.sub(r"\s+", "_", slug)
     return slug or "midia"
+
+
+def _parse_music_prompt_payload(raw_prompt: str) -> dict:
+    text = str(raw_prompt or "").strip()
+    if not text:
+        return {"prompt": "", "title": ""}
+
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return {"prompt": text, "title": _extract_title_from_text(text)}
+
+    if not isinstance(payload, dict):
+        return {"prompt": text, "title": ""}
+
+    title = str(
+        payload.get("title")
+        or payload.get("titulo")
+        or payload.get("name")
+        or payload.get("nome")
+        or ""
+    ).strip()
+    prompt = str(
+        payload.get("prompt")
+        or payload.get("description")
+        or payload.get("descricao")
+        or payload.get("lyrics_prompt")
+        or payload.get("music_prompt")
+        or ""
+    ).strip()
+    if not prompt:
+        prompt = text
+    return {"prompt": prompt, "title": title}
+
+
+def _extract_title_from_text(text: str) -> str:
+    for line in str(text or "").splitlines()[:5]:
+        match = re.match(r"\s*(?:title|titulo|nome da musica|song title)\s*[:=-]\s*(.+?)\s*$", line, flags=re.IGNORECASE)
+        if match:
+            return match.group(1).strip().strip('"').strip("'")
+    return ""
 
 
 def _timestamp() -> str:
@@ -255,11 +297,18 @@ class _MusicGenerationBackend:
         from google import genai
         from google.genai import types
 
+        music_payload = _parse_music_prompt_payload(prompt)
+        generation_prompt = music_payload["prompt"]
+        title = music_payload["title"]
+        prompt_for_model = generation_prompt
+        if title:
+            prompt_for_model = f"Song title: {title}\n\n{generation_prompt}"
+
         music_cfg = settings["music"]
         client = genai.Client(api_key=music_cfg["api_key"])
         response = client.models.generate_content(
             model=music_cfg["model"],
-            contents=prompt,
+            contents=prompt_for_model,
             config=types.GenerateContentConfig(
                 response_modalities=["AUDIO", "TEXT"],
             ),
@@ -296,7 +345,8 @@ class _MusicGenerationBackend:
 
         output_dir = _ensure_dir(music_cfg["output_dir"])
         ext = self.MIME_TO_EXT.get(str(mime_type).lower(), ".mp3")
-        output_path = os.path.join(output_dir, f"{_timestamp()}_music_{_slugify_prompt(prompt)}{ext}")
+        filename_seed = title or generation_prompt
+        output_path = os.path.join(output_dir, f"{_timestamp()}_music_{_slugify_prompt(filename_seed, max_len=80)}{ext}")
         with open(output_path, "wb") as f:
             f.write(audio_data)
 
@@ -306,6 +356,8 @@ class _MusicGenerationBackend:
             "details": {
                 "backend": "gemini_api",
                 "model": music_cfg["model"],
+                "title": title,
+                "generation_prompt": generation_prompt,
                 "text_preview": "\n".join(text_parts).strip(),
             },
         }

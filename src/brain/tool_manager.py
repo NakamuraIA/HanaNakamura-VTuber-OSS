@@ -1,8 +1,7 @@
 import logging
 import os
 import re
-
-from src.config.config_loader import CONFIG
+import urllib.parse
 
 logger = logging.getLogger(__name__)
 
@@ -14,23 +13,23 @@ FERRAMENTAS = [
             "description": (
                 "Memoriza um fato importante sobre o usuario ou o mundo para nunca esquecer. "
                 "Use isso quando o usuario pedir para 'lembrar', 'anotar', 'decorar' ou "
-                "quando ele mencionar algo pessoal relevante (ex: nome do pet, aniversario, preferencias)."
+                "quando ele mencionar algo pessoal relevante."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "sujeito": {
                         "type": "string",
-                        "description": "O sujeito do fato (ex: 'Nakamura', 'Gato do Nakamura').",
+                        "description": "O sujeito do fato.",
                     },
                     "relacao": {
                         "type": "string",
-                        "description": "A acao ou relacao (ex: 'gosta_de', 'mora_em', 'tem_nome').",
+                        "description": "A acao ou relacao.",
                     },
                     "objeto": {
                         "type": "string",
-                        "description": "O valor ou objeto do fato (ex: 'Morango', 'Sushi', 'Sao Paulo').",
-                    }
+                        "description": "O valor ou objeto do fato.",
+                    },
                 },
                 "required": ["sujeito", "relacao", "objeto"],
             },
@@ -40,11 +39,11 @@ FERRAMENTAS = [
         "type": "function",
         "function": {
             "name": "pesquisa_web",
-            "description": "Pesquisa informações em tempo real na internet (noticias, fatos, clima, etc).",
+            "description": "Pesquisa informacoes em tempo real na internet.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "query": {"type": "string", "description": "A busca em português ou inglês."}
+                    "query": {"type": "string", "description": "A busca em portugues ou ingles."}
                 },
                 "required": ["query"],
             },
@@ -62,6 +61,7 @@ class ToolManager:
     def _setup_tavily(self):
         try:
             from tavily import TavilyClient
+
             api_key = os.getenv("TAVILY_API_KEY")
             if api_key:
                 self._tavily = TavilyClient(api_key=api_key)
@@ -83,186 +83,115 @@ class ToolManager:
         if nome_tool == "pesquisa_web":
             return self._despachar_web(args)
 
-        logger.warning(f"[TOOL MANAGER] Tool desconhecida: {nome_tool}")
+        logger.warning("[TOOL MANAGER] Tool desconhecida: %s", nome_tool)
         return ("Menu_Tool nao reconhecida pelo sistema.", "Nao reconheci essa acao.")
 
     def _despachar_web(self, args: dict) -> tuple:
         query = args.get("query", "")
         if not query or not self._tavily:
-            return ("Tavily desabilitado ou query vazia.", "Não consegui pesquisar isso agora, mestre.")
+            return ("Tavily desabilitado ou query vazia.", "Nao consegui pesquisar isso agora, mestre.")
 
         try:
-            logger.info(f"[TOOL WEB] Pesquisando: {query}")
+            logger.info("[TOOL WEB] Pesquisando: %s", query)
             search_result = self._tavily.search(query, max_results=3)
             results = search_result.get("results", [])
-            
+
             if not results:
-                return (f"Nenhum resultado para '{query}'", "Não encontrei nada sobre isso na internet.")
+                return (f"Nenhum resultado para '{query}'", "Nao encontrei nada sobre isso na internet.")
 
             lines = [f"Resultados para '{query}':"]
-            for r in results:
-                lines.append(f"- {r.get('title')}: {r.get('content')[:300]}... ({r.get('url')})")
-            
+            for result in results:
+                title = result.get("title")
+                content = (result.get("content") or "")[:300]
+                url = result.get("url")
+                lines.append(f"- {title}: {content}... ({url})")
+
             contexto = "\n".join(lines)
-            return (contexto, f"Dei uma olhada na internet sobre {query} e descobri algumas coisas!")
-        except Exception as e:
-            logger.error(f"[TOOL WEB] Erro: {e}")
-            return (f"Erro na pesquisa web: {e}", "Tive um probleminha técnico ao pesquisar na internet.")
+            return (contexto, f"Dei uma olhada na internet sobre {query} e descobri algumas coisas.")
+        except Exception as exc:
+            logger.error("[TOOL WEB] Erro: %s", exc)
+            return (f"Erro na pesquisa web: {exc}", "Tive um probleminha tecnico ao pesquisar na internet.")
 
     def _despachar_anotacao(self, args: dict) -> tuple:
-        """Executa a persistência de um fato no sistema de memória."""
-        s = args.get("sujeito", "")
-        r = args.get("relacao", "")
-        o = args.get("objeto", "")
-        
-        if not (s and r and o):
-            return ("Dados incompletos para anotar o fato.", "Ops, não entendi o que você quer que eu anote.")
-            
-        if self.memory_manager:
-            try:
-                self.memory_manager.add_fact(s, r, o)
-                msg_cons = f"Fato gravado: {s} --[{r}]--> {o}"
-                logger.info(f"[TOOL] {msg_cons}")
-                return (msg_cons, f"Entendido! Anotei aqui que {s} {r} {o} e não vou mais esquecer.")
-            except Exception as e:
-                logger.error(f"[TOOL] Erro ao gravar fato: {e}")
-                return (f"Erro técnico ao salvar memória: {e}", "Tive um problema ao tentar guardar essa informação.")
-        else:
-            logger.warning("[TOOL] MemoryManager não configurado no ToolManager.")
-            return ("MemoryManager indisponível.", "Não consigo guardar isso na memória permanente agora.")
+        sujeito = args.get("sujeito", "")
+        relacao = args.get("relacao", "")
+        objeto = args.get("objeto", "")
+
+        if not (sujeito and relacao and objeto):
+            return ("Dados incompletos para anotar o fato.", "Ops, nao entendi o que voce quer que eu anote.")
+
+        if not self.memory_manager:
+            logger.warning("[TOOL] MemoryManager nao configurado no ToolManager.")
+            return ("MemoryManager indisponivel.", "Nao consigo guardar isso na memoria permanente agora.")
+
+        try:
+            self.memory_manager.add_fact(sujeito, relacao, objeto)
+            msg_cons = f"Fato gravado: {sujeito} --[{relacao}]--> {objeto}"
+            logger.info("[TOOL] %s", msg_cons)
+            return (msg_cons, f"Entendido. Anotei aqui que {sujeito} {relacao} {objeto}.")
+        except Exception as exc:
+            logger.error("[TOOL] Erro ao gravar fato: %s", exc)
+            return (f"Erro tecnico ao salvar memoria: {exc}", "Tive um problema ao tentar guardar essa informacao.")
+
+    def _extrair_video_id(self, url: str) -> str | None:
+        parsed = urllib.parse.urlparse(url)
+        video_id = None
+
+        if "youtube.com" in parsed.netloc:
+            video_id = urllib.parse.parse_qs(parsed.query).get("v", [None])[0]
+            if not video_id:
+                path_match = re.match(r"/(?:shorts|live|embed)/([a-zA-Z0-9_-]+)", parsed.path)
+                if path_match:
+                    video_id = path_match.group(1)
+        elif "youtu.be" in parsed.netloc:
+            video_id = parsed.path.lstrip("/")
+
+        return video_id
 
     def _despachar_youtube(self, args: dict) -> tuple:
-        """Puxa a legenda completa de um vídeo do YouTube via youtube-transcript-api."""
-        import urllib.parse
         url = args.get("url", "")
         if not url:
-            return ("URL vazio.", "Você me passou um link do YouTube vazio.")
+            return ("URL vazio.", "Voce me passou um link do YouTube vazio.")
 
-        # Extrai o ID do vídeo usando regex/parse
         try:
-            parsed = urllib.parse.urlparse(url)
-            video_id = None
-            if "youtube.com" in parsed.netloc:
-                video_id = urllib.parse.parse_qs(parsed.query).get("v", [None])[0]
-                if not video_id:
-                    # Tenta /shorts/ID, /live/ID, /embed/ID
-                    path_match = re.match(r'/(?:shorts|live|embed)/([a-zA-Z0-9_-]+)', parsed.path)
-                    if path_match:
-                        video_id = path_match.group(1)
-            elif "youtu.be" in parsed.netloc:
-                video_id = parsed.path.lstrip("/")
-            else:
-                return ("Link inválido.", "Isso não parece um link válido do YouTube.")
-            
+            video_id = self._extrair_video_id(url)
             if not video_id:
-                return ("ID de vídeo não encontrado no link.", "Não encontrei qual é o vídeo nesse link.")
-        except Exception as e:
-            logger.error(f"[TOOL YOUTUBE] Erro ao parsear URL: {e}")
-            return (f"Erro parse: {e}", "O formato do link está meio estranho.")
+                return ("ID de video nao encontrado no link.", "Nao encontrei qual e o video nesse link.")
+        except Exception as exc:
+            logger.error("[TOOL YOUTUBE] Erro ao parsear URL: %s", exc)
+            return (f"Erro parse: {exc}", "O formato do link esta meio estranho.")
 
-        logger.info(f"[TOOL YOUTUBE] Puxando legendas para ID: {video_id}")
-        
+        logger.info("[TOOL YOUTUBE] Puxando legendas para ID: %s", video_id)
+
         try:
             from youtube_transcript_api import YouTubeTranscriptApi
-            transcript_list = YouTubeTranscriptApi.get_transcript(video_id, languages=['pt', 'en', 'es'])
-            
-            # Montar a string crua
-            textos = [f"[{item['start']:.1f}s] {item['text']}" for item in transcript_list]
-            texto_completo = "\n".join(textos)
-            
-            bloco_retorno = (
-                f"--- TRANSCRIÇÃO YOUTUBE ({video_id}) ---\n"
-                f"{texto_completo}\n"
-                f"--- FIM DA TRANSCRIÇÃO ---\n"
+
+            transcript = YouTubeTranscriptApi().fetch(
+                video_id,
+                languages=["pt", "en", "es"],
+                preserve_formatting=False,
             )
-            
-            # Limitar tamanho caso a legenda seja monstruosa (ex: 4 horas) - 200k chars ~ 50k tokens
-            if len(bloco_retorno) > 200000:
-                bloco_retorno = bloco_retorno[:200000] + "\n\n...[TRUNCADO: VÍDEO MUITO LONGO]..."
 
-            return (bloco_retorno, "Prontinho, já li a transcrição do vídeo inteiro.")
-            
-        except ImportError:
-            return ("Biblioteca youtube_transcript_api nã instalada.", "Preciso que me instalem a biblioteca para baixar vídeos.")
-        except Exception as e:
-            logger.error(f"[TOOL YOUTUBE] Erro ao baixar legenda: {e}")
-            return (f"Erro Youtube API: {e}", "Não consegui ler as legendas desse vídeo. Talvez ele não tenha legendas automáticas ou seja privado.")
-
-    def _despachar_anotacao(self, args: dict) -> tuple:
-        """Executa a persistência de um fato no sistema de memória."""
-        s = args.get("sujeito", "")
-        r = args.get("relacao", "")
-        o = args.get("objeto", "")
-        
-        if not (s and r and o):
-            return ("Dados incompletos para anotar o fato.", "Ops, não entendi o que você quer que eu anote.")
-            
-        if self.memory_manager:
-            try:
-                self.memory_manager.add_fact(s, r, o)
-                msg_cons = f"Fato gravado: {s} --[{r}]--> {o}"
-                logger.info(f"[TOOL] {msg_cons}")
-                return (msg_cons, f"Entendido! Anotei aqui que {s} {r} {o} e não vou mais esquecer.")
-            except Exception as e:
-                logger.error(f"[TOOL] Erro ao gravar fato: {e}")
-                return (f"Erro técnico ao salvar memória: {e}", "Tive um problema ao tentar guardar essa informação.")
-        else:
-            logger.warning("[TOOL] MemoryManager não configurado no ToolManager.")
-            return ("MemoryManager indisponível.", "Não consigo guardar isso na memória permanente agora.")
-
-    def _despachar_youtube(self, args: dict) -> tuple:
-        """Puxa a legenda completa de um vídeo do YouTube via youtube-transcript-api."""
-        import urllib.parse
-        url = args.get("url", "")
-        if not url:
-            return ("URL vazio.", "Você me passou um link do YouTube vazio.")
-
-        # Extrai o ID do vídeo usando regex/parse
-        try:
-            parsed = urllib.parse.urlparse(url)
-            video_id = None
-            if "youtube.com" in parsed.netloc:
-                video_id = urllib.parse.parse_qs(parsed.query).get("v", [None])[0]
-                if not video_id:
-                    # Tenta /shorts/ID, /live/ID, /embed/ID
-                    path_match = re.match(r'/(?:shorts|live|embed)/([a-zA-Z0-9_-]+)', parsed.path)
-                    if path_match:
-                        video_id = path_match.group(1)
-            elif "youtu.be" in parsed.netloc:
-                video_id = parsed.path.lstrip("/")
-            else:
-                return ("Link inválido.", "Isso não parece um link válido do YouTube.")
-            
-            if not video_id:
-                return ("ID de vídeo não encontrado no link.", "Não encontrei qual é o vídeo nesse link.")
-        except Exception as e:
-            logger.error(f"[TOOL YOUTUBE] Erro ao parsear URL: {e}")
-            return (f"Erro parse: {e}", "O formato do link está meio estranho.")
-
-        logger.info(f"[TOOL YOUTUBE] Puxando legendas para ID: {video_id}")
-        
-        try:
-            from youtube_transcript_api import YouTubeTranscriptApi
-            transcript_list = YouTubeTranscriptApi.get_transcript(video_id, languages=['pt', 'en', 'es'])
-            
-            # Montar a string crua
-            textos = [f"[{item['start']:.1f}s] {item['text']}" for item in transcript_list]
+            textos = [f"[{item.start:.1f}s] {item.text}" for item in transcript]
             texto_completo = "\n".join(textos)
-            
             bloco_retorno = (
-                f"--- TRANSCRIÇÃO YOUTUBE ({video_id}) ---\n"
+                f"--- TRANSCRICAO YOUTUBE ({video_id}) ---\n"
                 f"{texto_completo}\n"
-                f"--- FIM DA TRANSCRIÇÃO ---\n"
+                f"--- FIM DA TRANSCRICAO ---\n"
             )
-            
-            # Limitar tamanho caso a legenda seja monstruosa (ex: 4 horas) - 200k chars ~ 50k tokens
-            if len(bloco_retorno) > 200000:
-                bloco_retorno = bloco_retorno[:200000] + "\n\n...[TRUNCADO: VÍDEO MUITO LONGO]..."
 
-            return (bloco_retorno, "Prontinho, já li a transcrição do vídeo inteiro.")
-            
+            if len(bloco_retorno) > 200000:
+                bloco_retorno = bloco_retorno[:200000] + "\n\n...[TRUNCADO: VIDEO MUITO LONGO]..."
+
+            return (bloco_retorno, "Prontinho, ja li a transcricao do video inteiro.")
         except ImportError:
-            return ("Biblioteca youtube_transcript_api nã instalada.", "Preciso que me instalem a biblioteca para baixar vídeos.")
-        except Exception as e:
-            logger.error(f"[TOOL YOUTUBE] Erro ao baixar legenda: {e}")
-            return (f"Erro Youtube API: {e}", "Não consegui ler as legendas desse vídeo. Talvez ele não tenha legendas automáticas ou seja privado.")
+            return (
+                "Biblioteca youtube_transcript_api nao instalada.",
+                "Preciso que instalem a biblioteca para baixar legendas do YouTube.",
+            )
+        except Exception as exc:
+            logger.error("[TOOL YOUTUBE] Erro ao baixar legenda: %s", exc)
+            return (
+                f"Erro Youtube API: {exc}",
+                "Nao consegui ler as legendas desse video. Talvez ele nao tenha legenda publica, esteja privado ou bloqueado.",
+            )

@@ -1,1 +1,0 @@
-# Hana Control Center GUI

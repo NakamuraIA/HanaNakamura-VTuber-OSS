@@ -5,7 +5,9 @@ Este guia instala a Hana em um PC novo usando o minimo publico: `Groq` para LLM/
 ## Requisitos
 
 - Windows 10 ou 11.
-- Python 3.10 ou superior.
+- Python 3.12 recomendado.
+- Node.js LTS.
+- Rust stable, necessario para rodar/empacotar o Control Center Tauri.
 - Git.
 - Microfone funcional.
 - Uma chave `GROQ_API_KEY`.
@@ -29,6 +31,9 @@ python -m venv .venv
 ```powershell
 python -m pip install --upgrade pip
 pip install -r requirements.txt
+cd control_panel
+npm install
+cd ..
 ```
 
 ## 4. Configurar `.env`
@@ -49,20 +54,23 @@ As outras chaves sao opcionais e so precisam existir se voce selecionar esses pr
 
 ```powershell
 copy src\config\config.example.json src\config\config.json
+copy src\config\persona.example.txt src\config\persona.txt
 ```
 
-O `config.json` e local e ignorado pelo Git.
+O `config.json` e o `persona.txt` sao locais e ignorados pelo Git.
 
-## 6. Rodar terminal
+## 6. Rodar Hana
 
 ```powershell
 python main.py
 ```
 
-## 7. Rodar GUI
+O `main.py` inicia o runtime, a API local e o Control Center Tauri.
+
+## 7. Rodar sem terminal visivel no Windows
 
 ```powershell
-python -m src.gui.hana_gui
+wscript run_hana_gui_hidden.vbs
 ```
 
 ## Setup minimo esperado
