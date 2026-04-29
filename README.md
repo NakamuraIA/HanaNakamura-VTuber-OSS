@@ -60,6 +60,27 @@ O projeto nao e so um chatbot: ele combina runtime de voz, painel GUI, memoria h
 
 ---
 
+## Interface (Control Center)
+
+<table>
+  <tr>
+    <td align="center" width="33%">
+      <img src="data/image/hana_gui_1.png" alt="Interface Principal" width="240" style="border-radius: 12px; display: block; margin: 0 auto;"><br>
+      <sub><b>Painel de Controle</b></sub>
+    </td>
+    <td align="center" width="33%">
+      <img src="data/image/hana_gui_2.png" alt="Chat e Configurações" width="240" style="border-radius: 12px; display: block; margin: 0 auto;"><br>
+      <sub><b>Configurações e Chat</b></sub>
+    </td>
+    <td align="center" width="33%">
+      <img src="data/image/hana_gui_3.png" alt="Preview de Mídia" width="240" style="border-radius: 12px; display: block; margin: 0 auto;"><br>
+      <sub><b>Preview de Mídia</b></sub>
+    </td>
+  </tr>
+</table>
+
+---
+
 ## O Que Ela Faz
 
 | Area | Recursos |
