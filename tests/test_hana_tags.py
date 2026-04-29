@@ -32,3 +32,13 @@ def test_legacy_video_tag_is_hidden_but_not_executable():
 
     assert result == ""
     assert "gerar_video" not in extract_xml_actions(raw)
+
+
+def test_character_image_tags_are_silent_and_extractable():
+    raw = 'ok<gerar_imagem_personagem>{"character":"hana","prompt":"stage"}</gerar_imagem_personagem>'
+
+    result = sanitize_history_message("Hana", raw)
+    actions = extract_xml_actions(raw)
+
+    assert result == "ok"
+    assert actions["gerar_imagem_personagem"] == ['{"character":"hana","prompt":"stage"}']

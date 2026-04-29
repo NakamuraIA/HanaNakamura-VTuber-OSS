@@ -88,6 +88,12 @@
     "STT_ATIVO": true,
     "STT_MODEL": "whisper-large-v3",
     "STT_LANGUAGE": "pt",
+    "STT_PROMPT": "Conversa casual em portugues brasileiro. O usuario se chama Nakamura e fala com a assistente Hana. Use grafia correta para nomes e termos comuns: Hana, Nakamura, Nyra, Mai, VTube Studio, Live2D, Cubism, Gemini, Groq, OpenRouter, ElevenLabs, Supabase, Playwright, FFmpeg, Brave. Transcreva somente fala humana clara. Ignore ruido, batidas no microfone, respiracao e silencio. Nao invente texto quando nao houver fala.",
+    "STT_NOISE_GUARD_ENABLED": true,
+    "STT_MIN_RECORDING_SECONDS": 0.45,
+    "STT_MIN_ACTIVE_SECONDS": 0.3,
+    "STT_MIN_SUSTAINED_ACTIVE_SECONDS": 0.12,
+    "STT_MIN_ACTIVE_RATIO": 0.08,
     "MIC_DEVICE_INDEX": null,
     "TAXA_AMOSTRAGEM": 44100,
     "VISAO_ATIVA": false,
@@ -117,6 +123,13 @@
     },
     "PC_CONTROL": {
         "brave_path": ""
+    },
+    "IMAGE_GENERATION": {
+        "provider": "google_cloud",
+        "model": "gemini-3.1-flash-image-preview",
+        "output_dir": "",
+        "character_root": "data/characters",
+        "default_character": "hana"
     },
     "MEDIA": {
         "enabled": true,

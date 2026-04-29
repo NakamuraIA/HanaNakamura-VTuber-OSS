@@ -13,6 +13,7 @@ from google.genai import types
 
 from src.brain.base_llm import BaseLLM
 from src.config.config_loader import CONFIG
+from src.core.provider_catalog import normalize_model_id
 
 logger = logging.getLogger(__name__)
 
@@ -21,11 +22,17 @@ class GoogleProvider(BaseLLM):
     def __init__(self):
         self.provedor = "google_cloud"
         prov_cfg = CONFIG.get("LLM_PROVIDERS", {}).get(self.provedor, {})
-        self.modelo_chat = prov_cfg.get("modelo", "gemini-2.5-flash-preview-04-17")
+        self.modelo_chat = normalize_model_id(
+            self.provedor,
+            prov_cfg.get("modelo", "gemini-2.5-flash"),
+        )
         self._client_gemini_api = None
         self._client_vertex = None
         self._default_backend = "gemini_api"
         super().__init__()
+
+    def _normalize_model_id(self, model_id: str, vision: bool = False) -> str:
+        return normalize_model_id(self.provedor, model_id, vision_only=vision)
 
     def _criar_cliente(self):
         client = self._get_client_for_backend(self._resolve_backend({}))
@@ -132,11 +139,21 @@ class GoogleProvider(BaseLLM):
         prov_cfg = self._provider_config()
         override_model = (request_context or {}).get("override_model")
         if override_model:
-            return str(override_model)
+            normalized_override = normalize_model_id(self.provedor, str(override_model), vision_only=bool(image_b64 or arquivos_multimidia))
+            if str(override_model).strip() != normalized_override:
+                logger.warning("[GOOGLE] Modelo invalido/antigo '%s' normalizado para '%s'.", override_model, normalized_override)
+            return normalized_override
 
         if image_b64 or arquivos_multimidia:
-            return prov_cfg.get("modelo_vision", modelo)
-        return modelo
+            requested_vision = prov_cfg.get("modelo_vision", modelo)
+            normalized_vision = normalize_model_id(self.provedor, requested_vision, vision_only=True)
+            if str(requested_vision).strip() != normalized_vision:
+                logger.warning("[GOOGLE] Modelo de visao invalido/antigo '%s' normalizado para '%s'.", requested_vision, normalized_vision)
+            return normalized_vision
+        normalized_model = normalize_model_id(self.provedor, modelo)
+        if str(modelo).strip() != normalized_model:
+            logger.warning("[GOOGLE] Modelo invalido/antigo '%s' normalizado para '%s'.", modelo, normalized_model)
+        return normalized_model
 
     def _build_contents(self, mensagens, image_b64: str = None, arquivos_multimidia: list | None = None, client=None):
         contents = []
@@ -251,6 +268,50 @@ class GoogleProvider(BaseLLM):
 
         return MockResponse(text)
 
+    def _extract_response_text(self, response) -> str:
+        try:
+            text = getattr(response, "text", None)
+            if text:
+                return text
+        except Exception as e:
+            logger.debug("[GOOGLE] response.text indisponivel: %s", e)
+
+        pieces: list[str] = []
+        try:
+            for candidate in getattr(response, "candidates", []) or []:
+                content = getattr(candidate, "content", None)
+                for part in getattr(content, "parts", []) or []:
+                    part_text = getattr(part, "text", None)
+                    if part_text:
+                        pieces.append(part_text)
+        except Exception as e:
+            logger.debug("[GOOGLE] Falha ao extrair texto de candidates: %s", e)
+
+        return "".join(pieces)
+
+    def _response_finish_reasons(self, response) -> list[str]:
+        reasons: list[str] = []
+        try:
+            for candidate in getattr(response, "candidates", []) or []:
+                reason = getattr(candidate, "finish_reason", None)
+                if reason is None:
+                    continue
+                reason_name = getattr(reason, "name", None) or str(reason)
+                reasons.append(reason_name)
+        except Exception as e:
+            logger.debug("[GOOGLE] Falha ao ler finish_reason: %s", e)
+        return reasons
+
+    def _log_response_finish_reasons(self, response, *, context: str):
+        reasons = self._response_finish_reasons(response)
+        if not reasons:
+            return
+        normalized = {reason.upper() for reason in reasons}
+        if any("STOP" not in reason for reason in normalized):
+            logger.warning("[GOOGLE] Resposta terminou com finish_reason=%s | contexto=%s", reasons, context)
+        else:
+            logger.debug("[GOOGLE] Resposta terminou normalmente | contexto=%s", context)
+
     def _prepare_request(self, modelo, mensagens, image_b64: str = None, arquivos_multimidia: list | None = None, request_context: dict | None = None):
         backend = self._resolve_backend(request_context)
         client = self._get_client_for_backend(backend)
@@ -282,6 +343,7 @@ class GoogleProvider(BaseLLM):
             "routed": bool((request_context or {}).get("routed")),
             "token_count": token_count,
             "structured_output": bool((request_context or {}).get("response_schema")),
+            "has_vision": bool(image_b64 or arquivos_multimidia),
         }
         return client, modelo_exec, contents, gen_config
 
@@ -307,7 +369,8 @@ class GoogleProvider(BaseLLM):
             contents=contents,
             config=gen_config,
         )
-        return self._mock_response(response.text)
+        self._log_response_finish_reasons(response, context="complete")
+        return self._mock_response(self._extract_response_text(response))
 
     def _chamar_api_stream(
         self,
@@ -324,6 +387,21 @@ class GoogleProvider(BaseLLM):
             arquivos_multimidia=arquivos_multimidia,
             request_context=request_context,
         )
+        if image_b64 or arquivos_multimidia:
+            logger.info("[GOOGLE] Streaming desativado para requisicao com visao; usando resposta completa.")
+            response = client.models.generate_content(
+                model=modelo_exec,
+                contents=contents,
+                config=gen_config,
+            )
+            self._log_response_finish_reasons(response, context="vision_complete")
+            text = self._extract_response_text(response)
+            if text:
+                yield text
+            else:
+                logger.warning("[GOOGLE] Resposta de visao sem texto retornado.")
+            return
+
         for chunk in client.models.generate_content_stream(
             model=modelo_exec,
             contents=contents,

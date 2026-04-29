@@ -16,9 +16,11 @@ class ProviderSelector:
         self.instancias = {}
         logger.info("[PROVIDER SELECTOR] Provedor LLM primário: %s", self.provedor_atual)
 
-    def get_provider(self):
-        """Retorna a instância do provedor atual. Lazy load para evitar init desnecessário."""
-        prov = str(self.provedor_atual or "groq").lower()
+    def get_provider(self, provider: str | None = None):
+        """Retorna a instancia do provedor solicitado ou atual, com lazy load."""
+        if provider is None:
+            self.provedor_atual = CONFIG.get("LLM_PROVIDER", self.provedor_atual)
+        prov = str(provider or self.provedor_atual or "groq").lower()
 
         if prov in self.instancias:
             return self.instancias[prov].refresh_runtime_settings()

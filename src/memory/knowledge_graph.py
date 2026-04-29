@@ -67,6 +67,39 @@ class HanaKnowledgeGraph:
             
         return facts
 
+    def get_all_facts(self) -> List[Dict[str, str]]:
+        """Retorna todos os fatos do grafo como uma lista de dicionários."""
+        facts = []
+        for s, o, data in self.graph.edges(data=True):
+            facts.append({
+                "subject": s,
+                "relation": data.get("relation", "relacionado_a"),
+                "object": o
+            })
+        return facts
+
+    def delete_fact(self, subject: str, relation: str, object_val: str) -> bool:
+        """Remove um fato específico do grafo."""
+        s = subject.strip().lower()
+        r = relation.strip().lower()
+        o = object_val.strip().lower()
+        
+        if self.graph.has_edge(s, o):
+            # Verifica se a relação bate
+            if self.graph.get_edge_data(s, o).get("relation", "").lower() == r:
+                self.graph.remove_edge(s, o)
+                
+                # Remove nós órfãos para manter o grafo limpo
+                if self.graph.degree(s) == 0:
+                    self.graph.remove_node(s)
+                if self.graph.degree(o) == 0:
+                    self.graph.remove_node(o)
+                    
+                self.save()
+                logger.info(f"[KNOWLEDGE GRAPH] Fato removido: {s} --[{r}]--> {o}")
+                return True
+        return False
+
     def save(self):
         """Salva o grafo em disco."""
         try:

@@ -66,12 +66,61 @@ def repair_mojibake_text(text: str) -> str:
     return repaired
 
 
+_INTERNAL_META_LINE_RE = re.compile(
+    r"^\s*(?:/?XML tags correct\?|[*-]\s*1 to 4 sentences max\?|[*-]\s*No questions at.*|[*-]\s*XML tags correct\?|Perfect\.?)\s*$",
+    flags=re.IGNORECASE,
+)
+
+
+def sanitize_visible_response_text(text: str) -> str:
+    """Remove lixo de formatacao interna antes de exibir no terminal ou GUI."""
+    if not text:
+        return ""
+
+    cleaned = repair_mojibake_text(str(text))
+    cleaned = re.sub(r"\[EMOTION:[^\]]*\]?", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\[PARAM:[^\]]*\]?", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\[INDEX_[^\]]*\]?", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\[[A-Z_]+:[^\]]*$", "", cleaned)
+    cleaned = re.sub(r"<[^>\n]*$", "", cleaned)
+
+    for tag_name in SILENT_XML_TAGS:
+        cleaned = re.sub(
+            rf"<{tag_name}>.*?(?:</{tag_name}>|$)",
+            "",
+            cleaned,
+            flags=re.DOTALL | re.IGNORECASE,
+        )
+
+    cleaned = re.sub(r"<(?:think|pensamento|thought)>.*?(?:</(?:think|pensamento|thought)>|$)", "", cleaned, flags=re.DOTALL | re.IGNORECASE)
+
+    has_meta_checklist = bool(
+        re.search(r"XML tags correct\?|1 to 4 sentences max\?|No questions at", cleaned, flags=re.IGNORECASE)
+    )
+    lines = []
+    for line in cleaned.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if _INTERNAL_META_LINE_RE.match(stripped):
+            continue
+        if has_meta_checklist and stripped.lower() in {"yes", "yes.", "perfect", "perfect."}:
+            continue
+        lines.append(line.rstrip())
+
+    cleaned = "\n".join(lines)
+    cleaned = re.sub(r"\s+\n", "\n", cleaned)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
+    return cleaned.strip()
+
+
 def limpar_texto_tts(texto: str) -> str:
     """Remove canais silenciosos e ruido visual antes do envio ao TTS."""
     if not texto:
         return ""
 
-    texto_limpo = repair_mojibake_text(texto)
+    texto_limpo = sanitize_visible_response_text(repair_mojibake_text(texto))
     texto_limpo = re.sub(r"<think>.*?</think>", "", texto_limpo, flags=re.DOTALL | re.IGNORECASE)
     texto_limpo = re.sub(r"<pensamento>.*?</pensamento>", "", texto_limpo, flags=re.DOTALL | re.IGNORECASE)
     texto_limpo = re.sub(r"<thought>.*?</thought>", "", texto_limpo, flags=re.DOTALL | re.IGNORECASE)

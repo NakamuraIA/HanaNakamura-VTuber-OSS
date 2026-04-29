@@ -15,7 +15,7 @@ from typing import Any, Callable
 import psutil
 
 from src.config.config_loader import CONFIG
-from src.gui.widgets.pc_action_popup import confirm_pc_action_popup
+from src.modules.tools.pc_action_popup import confirm_pc_action_popup
 from src.modules.tools.inbox_manager import InboxManager
 
 logger = logging.getLogger(__name__)
@@ -49,6 +49,10 @@ ACTION_ALIASES = {
     "write_text": "type_text",
     "input_text": "type_text",
     "typewrite": "type_text",
+    "paste": "type_text",
+    "paste_text": "type_text",
+    "colar": "type_text",
+    "colar_texto": "type_text",
     "mouse_move": "move_mouse",
     "move_cursor": "move_mouse",
     "cursor_move": "move_mouse",
@@ -84,6 +88,32 @@ KEYEVENTF_KEYUP = 0x0002
 SW_RESTORE = 9
 
 _LAST_STARTED_PROCESS: dict[str, Any] = {"pid": None, "target": "", "timestamp": 0.0}
+PROJECT_ROOT = os.path.abspath(os.getcwd()).lower()
+CRITICAL_PROCESS_NAMES = {
+    "system",
+    "system idle process",
+    "registry",
+    "smss.exe",
+    "csrss.exe",
+    "wininit.exe",
+    "winlogon.exe",
+    "services.exe",
+    "lsass.exe",
+    "lsaiso.exe",
+    "fontdrvhost.exe",
+    "dwm.exe",
+}
+GENERIC_KILL_TARGETS = {
+    "",
+    "*",
+    "all",
+    "tudo",
+    "todos",
+    "everything",
+    "processos",
+    "processes",
+    "os processos",
+}
 
 
 @dataclass(frozen=True)
@@ -124,6 +154,8 @@ def _normalize_pc_action_payload(payload: dict[str, Any]) -> tuple[str, dict[str
         normalized.setdefault("command", "notepad.exe")
 
     if action == "type_text":
+        if raw_action in {"paste", "paste_text", "colar", "colar_texto"}:
+            normalized.setdefault("method", "paste")
         for fallback_field in ("text", "value", "content", "message"):
             value = normalized.get(fallback_field)
             if value:
@@ -146,6 +178,29 @@ def _normalize_pc_action_payload(payload: dict[str, Any]) -> tuple[str, dict[str
 
     if action == "set_volume":
         normalized = _normalize_set_volume_payload(normalized, raw_action)
+
+    if action == "list_processes":
+        if normalized.get("sort_by") is None:
+            for field in ("order_by", "sort", "metric"):
+                if normalized.get(field) is not None:
+                    normalized["sort_by"] = normalized.get(field)
+                    break
+
+    if action == "kill_process":
+        if normalized.get("pid") is None:
+            for field in ("process_id", "processId"):
+                if normalized.get(field) is not None:
+                    normalized["pid"] = normalized.get(field)
+                    break
+        if not normalized.get("name"):
+            for field in ("target", "process", "process_name", "exe", "image"):
+                value = normalized.get(field)
+                if value:
+                    normalized["name"] = str(value)
+                    break
+        if normalized.get("names") is None and isinstance(normalized.get("name"), list):
+            normalized["names"] = normalized.get("name")
+            normalized.pop("name", None)
 
     return action, normalized
 
@@ -236,6 +291,14 @@ def parse_pc_action_payload(raw_payload: str | dict[str, Any]) -> PCActionReques
     action, normalized = _normalize_pc_action_payload(payload)
     if action not in ALLOWED_ACTIONS:
         raise ValueError(f"Acao de PC nao suportada: {action or '(vazia)'}")
+    if action == "kill_process":
+        has_target = any(normalized.get(field) for field in ("pid", "name", "pids", "names"))
+        target_text = str(normalized.get("name") or normalized.get("target") or "").strip().lower()
+        target_names = normalized.get("names") if isinstance(normalized.get("names"), list) else []
+        if not has_target:
+            raise ValueError("Informe 'pid' ou 'name' especifico para encerrar processo. Nunca use alvo generico.")
+        if (target_text and target_text in GENERIC_KILL_TARGETS) or any(str(item).strip().lower() in GENERIC_KILL_TARGETS for item in target_names):
+            raise ValueError("Alvo generico recusado. Liste processos primeiro e escolha PID ou nome exato.")
 
     return PCActionRequest(
         action=action,
@@ -269,7 +332,7 @@ def summarize_pc_action(payload: dict[str, Any]) -> str:
     if action == "start_process":
         return f"Iniciar processo: {payload.get('path') or payload.get('command') or ''}"
     if action == "kill_process":
-        target = payload.get("pid") or payload.get("name") or ""
+        target = payload.get("pid") or payload.get("name") or payload.get("pids") or payload.get("names") or ""
         return f"Encerrar processo: {target}"
     if action == "run_command":
         return f"Executar comando: {payload.get('command', '')}"
@@ -309,6 +372,88 @@ def _remember_started_process(pid: int | None, target: str):
     _LAST_STARTED_PROCESS["pid"] = int(pid) if pid else None
     _LAST_STARTED_PROCESS["target"] = str(target or "")
     _LAST_STARTED_PROCESS["timestamp"] = time.time()
+
+
+def _safe_proc_attr(proc: psutil.Process, name: str, default=None):
+    try:
+        return getattr(proc, name)()
+    except Exception:
+        return default
+
+
+def _safe_proc_info(proc: psutil.Process, field: str, default=None):
+    try:
+        if hasattr(proc, "info") and field in proc.info:
+            return proc.info.get(field, default)
+    except Exception:
+        pass
+    return _safe_proc_attr(proc, field, default)
+
+
+def _proc_cmdline_text(proc: psutil.Process) -> str:
+    cmdline = _safe_proc_info(proc, "cmdline", []) or []
+    if isinstance(cmdline, (list, tuple)):
+        return " ".join(str(item) for item in cmdline)
+    return str(cmdline or "")
+
+
+def _get_protected_pids() -> set[int]:
+    protected = {os.getpid()}
+    try:
+        current = psutil.Process(os.getpid())
+        protected.update(parent.pid for parent in current.parents())
+        protected.update(child.pid for child in current.children(recursive=True))
+    except Exception:
+        pass
+    if _LAST_STARTED_PROCESS.get("pid"):
+        try:
+            protected.add(int(_LAST_STARTED_PROCESS["pid"]))
+        except Exception:
+            pass
+    return protected
+
+
+def _is_hana_process(proc: psutil.Process) -> bool:
+    try:
+        if int(proc.pid) in _get_protected_pids():
+            return True
+    except Exception:
+        pass
+    cmdline = _proc_cmdline_text(proc).lower()
+    if PROJECT_ROOT and PROJECT_ROOT in cmdline:
+        return True
+    return any(token in cmdline for token in ("main.py", "hana_gui.py", "run_hana_gui_hidden.vbs"))
+
+
+def _is_critical_process(proc: psutil.Process) -> bool:
+    try:
+        if int(proc.pid) <= 4:
+            return True
+    except Exception:
+        pass
+    name = str(_safe_proc_info(proc, "name", "") or "").strip().lower()
+    return name in CRITICAL_PROCESS_NAMES
+
+
+def _classify_process(proc: psutil.Process) -> tuple[bool, str]:
+    if _is_hana_process(proc):
+        return True, "HANA/PROTEGIDO"
+    if _is_critical_process(proc):
+        return True, "SISTEMA/PROTEGIDO"
+    return False, "USUARIO"
+
+
+def _memory_mb(proc: psutil.Process) -> float:
+    memory_info = _safe_proc_info(proc, "memory_info")
+    rss = getattr(memory_info, "rss", 0) if memory_info is not None else 0
+    return round(float(rss or 0) / 1024 / 1024, 1)
+
+
+def _cpu_percent(proc: psutil.Process) -> float:
+    try:
+        return round(float(proc.cpu_percent(interval=None)), 1)
+    except Exception:
+        return 0.0
 
 
 def _get_cursor_pos() -> tuple[int, int]:
@@ -370,9 +515,17 @@ def _focus_window_handle(hwnd: int | None) -> bool:
 
 
 def _focus_window_for_payload(payload: dict[str, Any]) -> bool:
-    pid = payload.get("pid") or _LAST_STARTED_PROCESS.get("pid")
+    pid = payload.get("pid")
     title = str(payload.get("window_title") or payload.get("title") or "").strip()
     process_name = str(payload.get("process_name") or "").strip().lower()
+    focus_last_started = bool(payload.get("focus_last_started", False))
+    recent_started = time.time() - float(_LAST_STARTED_PROCESS.get("timestamp") or 0.0) <= 12.0
+
+    if not pid and not title and not process_name and not focus_last_started and not recent_started:
+        return False
+
+    if pid is None and (focus_last_started or recent_started):
+        pid = _LAST_STARTED_PROCESS.get("pid")
 
     hwnd = None
     if pid is not None:
@@ -381,7 +534,7 @@ def _focus_window_for_payload(payload: dict[str, Any]) -> bool:
         hwnd = _find_window_handle(process_name=process_name, title_contains=title)
     if hwnd is None and title:
         hwnd = _find_window_handle(title_contains=title)
-    if hwnd is None and _LAST_STARTED_PROCESS.get("pid"):
+    if hwnd is None and (focus_last_started or recent_started) and _LAST_STARTED_PROCESS.get("pid"):
         hwnd = _find_window_handle(pid=int(_LAST_STARTED_PROCESS["pid"]))
 
     return _focus_window_handle(hwnd)
@@ -402,7 +555,17 @@ def execute_pc_action(
     *,
     confirm_callback: Callable[[PCActionRequest], bool] | None = None,
 ) -> dict[str, Any]:
-    request = parse_pc_action_payload(raw_payload)
+    try:
+        request = parse_pc_action_payload(raw_payload)
+    except Exception as exc:
+        return {
+            "ok": False,
+            "status": "failed",
+            "action": "parse_pc_action",
+            "risk": "baixo",
+            "summary": "Interpretar acao no PC",
+            "message": str(exc),
+        }
     confirm_callback = confirm_callback or confirm_pc_action
 
     if request.risk in {"medio", "alto"}:
@@ -550,20 +713,52 @@ def _view_image(payload: dict[str, Any]) -> dict[str, Any]:
 def _list_processes(payload: dict[str, Any]) -> dict[str, Any]:
     query = str(payload.get("query") or "").strip().lower()
     limit = max(1, min(int(payload.get("limit") or 25), 100))
+    sort_by = str(payload.get("sort_by") or payload.get("sort") or "memory").strip().lower()
+    include_system = bool(payload.get("include_system", False))
     rows = []
-    for proc in psutil.process_iter(["pid", "name"]):
-        name = str(proc.info.get("name") or "")
-        if query and query not in name.lower():
+    for proc in psutil.process_iter(["pid", "name", "memory_info", "cmdline", "username", "status"]):
+        name = str(_safe_proc_info(proc, "name", "") or "")
+        cmdline = _proc_cmdline_text(proc)
+        haystack = f"{name} {cmdline}".lower()
+        if query and query not in haystack:
             continue
-        rows.append({"pid": proc.info.get("pid"), "name": name})
-        if len(rows) >= limit:
-            break
+        protected, protection = _classify_process(proc)
+        if protected and not include_system and protection == "SISTEMA/PROTEGIDO":
+            continue
+        rows.append(
+            {
+                "pid": int(_safe_proc_info(proc, "pid", getattr(proc, "pid", 0)) or 0),
+                "name": name,
+                "memory_mb": _memory_mb(proc),
+                "cpu_percent": _cpu_percent(proc),
+                "protected": protected,
+                "protection": protection,
+                "safe_to_kill": not protected,
+                "cmdline": cmdline[:160],
+            }
+        )
 
-    content = "\n".join([f"{row['pid']} - {row['name']}" for row in rows]) or "(nenhum processo encontrado)"
+    if sort_by in {"cpu", "cpu_percent"}:
+        rows.sort(key=lambda row: row["cpu_percent"], reverse=True)
+    elif sort_by in {"pid"}:
+        rows.sort(key=lambda row: row["pid"])
+    elif sort_by in {"name"}:
+        rows.sort(key=lambda row: row["name"].lower())
+    else:
+        rows.sort(key=lambda row: row["memory_mb"], reverse=True)
+    rows = rows[:limit]
+
+    content = "\n".join(
+        [
+            f"{row['pid']} - {row['name']} | RAM {row['memory_mb']} MB | CPU {row['cpu_percent']}% | {row['protection']}"
+            for row in rows
+        ]
+    ) or "(nenhum processo encontrado)"
     return {
         "message": f"{len(rows)} processo(s) listado(s).",
         "content": content,
         "count": len(rows),
+        "processes": rows,
     }
 
 
@@ -610,28 +805,70 @@ def _start_process(payload: dict[str, Any]) -> dict[str, Any]:
 def _kill_process(payload: dict[str, Any]) -> dict[str, Any]:
     pid = payload.get("pid")
     name = str(payload.get("name") or "").strip().lower()
+    pids = payload.get("pids") if isinstance(payload.get("pids"), list) else []
+    names = payload.get("names") if isinstance(payload.get("names"), list) else []
 
+    if not pid and not name and not pids and not names:
+        raise ValueError("Informe 'pid' ou 'name' especifico para encerrar processo. Nunca use alvo generico.")
+    if (name and name in GENERIC_KILL_TARGETS) or any(str(item).strip().lower() in GENERIC_KILL_TARGETS for item in names):
+        raise ValueError("Alvo generico recusado. Liste processos primeiro e escolha PID ou nome exato.")
+
+    targets: list[psutil.Process] = []
     if pid is not None:
-        proc = psutil.Process(int(pid))
-    elif name:
-        matches = [proc for proc in psutil.process_iter(["pid", "name"]) if str(proc.info.get("name") or "").lower() == name]
+        targets.append(psutil.Process(int(pid)))
+    for item in pids:
+        targets.append(psutil.Process(int(item)))
+    if name:
+        matches = [proc for proc in psutil.process_iter(["pid", "name", "cmdline"]) if str(_safe_proc_info(proc, "name", "") or "").lower() == name]
         if not matches:
             raise RuntimeError(f"Nenhum processo encontrado com nome exato: {name}")
-        if len(matches) > 1:
+        if len(matches) > 1 and not payload.get("allow_multiple"):
             raise RuntimeError(f"Mais de um processo com nome '{name}'. Informe o PID.")
-        proc = psutil.Process(matches[0].info["pid"])
-    else:
-        raise ValueError("Informe 'pid' ou 'name' para encerrar processo.")
+        targets.extend(matches)
+    for raw_name in names:
+        target_name = str(raw_name or "").strip().lower()
+        if not target_name or target_name in GENERIC_KILL_TARGETS:
+            continue
+        targets.extend(
+            proc
+            for proc in psutil.process_iter(["pid", "name", "cmdline"])
+            if str(_safe_proc_info(proc, "name", "") or "").lower() == target_name
+        )
 
-    proc.terminate()
-    try:
-        proc.wait(timeout=5)
-    except psutil.TimeoutExpired:
-        proc.kill()
+    unique: dict[int, psutil.Process] = {}
+    for proc in targets:
+        unique[int(proc.pid)] = proc
+    targets = list(unique.values())
+    if not targets:
+        raise RuntimeError("Nenhum processo valido encontrado para encerrar.")
+
+    blocked = []
+    killed = []
+    for proc in targets:
+        protected, protection = _classify_process(proc)
+        proc_name = str(_safe_proc_info(proc, "name", "") or "")
+        if protected:
+            blocked.append(f"{proc.pid} - {proc_name} ({protection})")
+            continue
+
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except psutil.TimeoutExpired:
+            proc.kill()
+        killed.append({"pid": proc.pid, "name": proc_name})
+
+    if blocked and not killed:
+        raise RuntimeError("Processo protegido recusado: " + "; ".join(blocked))
+
+    message = f"{len(killed)} processo(s) encerrado(s)."
+    if blocked:
+        message += " Protegidos recusados: " + "; ".join(blocked)
     return {
-        "message": f"Processo encerrado: {proc.pid}",
-        "pid": proc.pid,
-        "target": proc.name(),
+        "message": message,
+        "killed": killed,
+        "blocked": blocked,
+        "target": ", ".join(f"{item['pid']}:{item['name']}" for item in killed),
     }
 
 
@@ -675,6 +912,27 @@ def _run_command(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _set_clipboard_text(text: str):
+    try:
+        import pyperclip
+
+        pyperclip.copy(text)
+        return
+    except Exception:
+        pass
+
+    import tkinter as tk
+
+    root = tk.Tk()
+    root.withdraw()
+    try:
+        root.clipboard_clear()
+        root.clipboard_append(text)
+        root.update()
+    finally:
+        root.destroy()
+
+
 def _type_text(payload: dict[str, Any]) -> dict[str, Any]:
     if keyboard is None:
         raise RuntimeError("Biblioteca 'keyboard' não está disponível para digitação automatizada.")
@@ -686,13 +944,22 @@ def _type_text(payload: dict[str, Any]) -> dict[str, Any]:
     focus_delay = max(0.0, min(float(payload.get("focus_delay") or 0.35), 3.0))
     if focus_delay:
         time.sleep(focus_delay)
-    keyboard.write(text, delay=delay)
+    method = str(payload.get("method") or "").strip().lower()
+    should_paste = method in {"paste", "clipboard", "ctrl_v"} or len(text) > 280 or "\n" in text
+    if should_paste:
+        _set_clipboard_text(text)
+        keyboard.press_and_release("ctrl+v")
+        typed_method = "clipboard"
+    else:
+        keyboard.write(text, delay=delay)
+        typed_method = "keyboard"
     if payload.get("press_enter"):
         keyboard.press_and_release("enter")
     return {
         "message": "Texto digitado no sistema.",
         "chars": len(text),
         "window_focused": focus_ok,
+        "method": typed_method,
     }
 
 

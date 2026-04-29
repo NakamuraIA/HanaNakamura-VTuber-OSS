@@ -29,7 +29,7 @@ class MotorTTSElevenLabs:
         self.api_key = os.getenv("ELEVENLABS_API_KEY") or CONFIG.get("ELEVENLABS_API_KEY")
         self.voice_id = str(settings.get("voice_id") or settings.get("voice") or "").strip()
         self.model_id = str(settings.get("model_id") or "eleven_flash_v2_5").strip() or "eleven_flash_v2_5"
-        self.speed = self._clamp_float(settings.get("rate", 1.1), 0.7, 1.2, 1.1)
+        self.speed = self._clamp_float(settings.get("rate", 1.1), 0.7, 1.5, 1.1)
         self.stability = self._clamp_float(settings.get("stability", 0.5), 0.0, 1.0, 0.5)
         self.similarity_boost = self._clamp_float(settings.get("similarity_boost", 0.75), 0.0, 1.0, 0.75)
         self.style = self._clamp_float(settings.get("style", 0.0), 0.0, 1.0, 0.0)

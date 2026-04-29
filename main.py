@@ -35,6 +35,7 @@ from src.brain.tool_manager import ToolManager
 from src.memory.memory_manager import HanaMemoryManager
 from src.modules.voice.stt_whisper import MotorSTTWhisper
 from src.modules.voice.audio_control import poll_external_stop, register_stop_callback, request_global_stop
+from src.modules.voice import speech_state
 from src.modules.voice.tts_selector import get_tts
 from src.modules.vision.periodic_vision import VisaoNyra
 from src.modules.vision.image_gen import HanaImageGen
@@ -46,10 +47,11 @@ from src.core.prompt_builder import build_terminal_system_prompt
 from src.providers.provider_selector import ProviderSelector
 from src.core.request_profiles import build_request_context
 from src.utils.hana_tags import extract_xml_actions
-from src.utils.text import limpar_texto_tts, ui
+from src.utils.text import limpar_texto_tts, sanitize_visible_response_text, ui
 from src.utils.sentence_divider import SentenceDivider
 from src.config.config_loader import CONFIG
 from src.core.runtime_capabilities import get_stop_hotkey_settings
+from src.api.server import start_server
 
 try:
     import keyboard
@@ -85,6 +87,56 @@ emotion_engine.registrar_callback_emocao(_trigger_vts_emotion)
 # === Gerador de Mídia ===
 image_gen = HanaImageGen()
 music_gen = HanaMusicGen()
+
+# === Inicializar API Backend (FastAPI + WebSockets) ===
+def _start_backend_api():
+    try:
+        context = {
+            "memory_manager": memory_manager,
+            "llm_selector": llm_selector,
+            "image_gen": image_gen,
+            "music_gen": music_gen,
+            "emotion_engine": emotion_engine,
+            "tts": tts,
+            "signals": signals
+        }
+        start_server(host="127.0.0.1", port=8042, context=context)
+    except Exception as e:
+        logging.error(f"[MAIN] Erro ao iniciar a API FastAPI: {e}")
+
+threading.Thread(
+    target=_start_backend_api,
+    daemon=True,
+    name="HanaBackendAPI"
+).start()
+
+# === Inicializar Nova GUI (Tauri/React) ===
+def _start_new_gui():
+    import subprocess
+    try:
+        logging.info("[MAIN] Iniciando a Nova GUI Tauri (Control Panel)...")
+        # Se estiver no Windows
+        if os.name == "nt":
+            subprocess.Popen(
+                "npx tauri dev", 
+                cwd=os.path.join(os.getcwd(), "control_panel"),
+                shell=True,
+                creationflags=subprocess.CREATE_NEW_CONSOLE
+            )
+        else:
+            subprocess.Popen(
+                "npx tauri dev", 
+                cwd=os.path.join(os.getcwd(), "control_panel"),
+                shell=True
+            )
+    except Exception as e:
+        logging.error(f"[MAIN] Erro ao iniciar a Nova GUI: {e}")
+
+threading.Thread(
+    target=_start_new_gui,
+    daemon=True,
+    name="HanaNewGUI"
+).start()
 
 
 def _classify_terminal_task(user_message: str) -> str:
@@ -340,6 +392,10 @@ while True:
         ui.novo_turno()
         emotion_engine.novo_turno()
 
+        # Garante que Hana não esteja marcada como falando no início do turno
+        signals.HANA_SPEAKING = False
+        speech_state.set_speaking(False)
+
         if not CONFIG.get("STT_ATIVO", True):
             import time
             time.sleep(1)
@@ -405,10 +461,16 @@ while True:
         divider = SentenceDivider(faster_first_response=True)
         displayed_hana_prefix = False
 
+        # Marca a origem da mensagem para a LLM saber como responder
+        user_message_marcada = (
+            f"[ORIGEM: terminal_voice | STT ativo | resposta sera falada em voz alta]\n"
+            f"Mensagem do usuario: {user_message}"
+        )
+
         token_stream = llm.gerar_resposta_stream(
             chat_history=raw_history,
             sistema_prompt=sistema_prompt,
-            user_message=user_message,
+            user_message=user_message_marcada,
             image_b64=image_b64,
             request_context=build_request_context(channel="terminal_voice", task_type=terminal_task_type),
         )
@@ -432,13 +494,14 @@ while True:
                             except: pass
 
                 # Imprimir no terminal em tempo real.
-                if chunk.text.strip():
-                    ui.print_hana_text(chunk.text, first_chunk=not displayed_hana_prefix)
+                visible_text = sanitize_visible_response_text(chunk.text)
+                if visible_text.strip():
+                    ui.print_hana_text(visible_text, first_chunk=not displayed_hana_prefix)
                     displayed_hana_prefix = True
                 full_raw_response.append(chunk.raw)
 
                 # Acumular texto limpo para TTS
-                texto_tts = limpar_texto_tts(chunk.text)
+                texto_tts = limpar_texto_tts(visible_text)
                 if texto_tts.strip():
                     full_tts_text.append(texto_tts.strip())
 
@@ -447,8 +510,12 @@ while True:
         if texto_final_tts.strip() and CONFIG.get("TTS_ATIVO", True):
             ui.print_falando(tts.provedor)
             signals.HANA_SPEAKING = True
-            tts.falar(texto_final_tts)
-            signals.HANA_SPEAKING = False
+            speech_state.set_speaking(True)
+            try:
+                tts.falar(texto_final_tts)
+            finally:
+                signals.HANA_SPEAKING = False
+                speech_state.set_speaking(False)
 
         ai_response_falada = divider.complete_response or "".join(full_raw_response)
         actions = extract_xml_actions(
@@ -457,6 +524,8 @@ while True:
                 "salvar_memoria",
                 "gerar_imagem",
                 "editar_imagem",
+                "gerar_imagem_personagem",
+                "editar_imagem_personagem",
                 "gerar_musica",
                 "acao_pc",
                 "analisar_youtube",
@@ -491,7 +560,19 @@ while True:
                 logging.info(f"[XML] Editando imagem: {prompt_edit[:80]}...")
                 image_gen.edit_and_show(prompt_edit)
 
-        # 4. <gerar_musica>prompt</gerar_musica>
+        # 4. <gerar_imagem_personagem>{json}</gerar_imagem_personagem>
+        for payload_img in actions.get("gerar_imagem_personagem", []):
+            if payload_img:
+                logging.info(f"[XML] Gerando imagem de personagem: {payload_img[:80]}...")
+                image_gen.generate_character_and_show(payload_img)
+
+        # 5. <editar_imagem_personagem>{json}</editar_imagem_personagem>
+        for payload_edit in actions.get("editar_imagem_personagem", []):
+            if payload_edit:
+                logging.info(f"[XML] Editando imagem de personagem: {payload_edit[:80]}...")
+                image_gen.edit_character_and_show(payload_edit)
+
+        # 6. <gerar_musica>prompt</gerar_musica>
         for prompt_music in actions.get("gerar_musica", []):
             if prompt_music:
                 logging.info(f"[XML] Gerando musica: {prompt_music[:80]}...")

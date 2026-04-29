@@ -66,7 +66,7 @@ O projeto nao e so um chatbot: ele combina runtime de voz, painel GUI, memoria h
 | --- | --- |
 | Voz | STT por Whisper, TTS por ElevenLabs, Google, Azure, OpenAI e Edge, stop global por F8 |
 | Cerebro | Providers `google_cloud`, `groq`, `openrouter`, `openai` e `cerebras` |
-| GUI | Control Center em CustomTkinter, chat visual, anexos, markdown, cards de audio e preview de midia |
+| GUI | Control Center em Tauri/React, chat visual, anexos, markdown, cards de audio e preview de midia |
 | Memoria | SQLite cronologico, RAG vetorial e grafo de conhecimento |
 | Midia | Geracao/edicao de imagem, geracao de musica, analise de video/anexos e historico local |
 | Desktop | Tool XML para abrir URL, abrir app, ler arquivo, mover mouse, digitar, volume e processos |
@@ -86,9 +86,9 @@ O terminal e o modo de voz real da Hana. Ele escuta o microfone, monta contexto,
 
 ### Hana Control Center
 
-Arquivo principal: [`src/gui/hana_gui.py`](src/gui/hana_gui.py)
+Arquivos principais: [`control_panel/`](control_panel/) e backend FastAPI em [`src/api/server.py`](src/api/server.py)
 
-A GUI e o painel de controle completo. Ela aceita textos grandes, anexos, drag and drop, `Ctrl+V`, arquivos de codigo, imagens, audio, video, PDF e documentos.
+A GUI Tauri/React e o painel de controle completo. Ela aceita textos grandes, anexos, drag and drop, `Ctrl+V`, arquivos de codigo, imagens, audio, video, PDF e documentos.
 
 **Regra da GUI:** pode responder grande quando fizer sentido, porque funciona como chat visual.
 
@@ -139,7 +139,7 @@ src/
   brain/          pipeline LLM e tools
   config/         persona, prompt e config principal
   core/           profiles, capabilities e prompt builder
-  gui/            Control Center e abas
+  api/            backend FastAPI usado pelo Control Center
   memory/         SQLite, RAG e knowledge graph
   modules/
     media/        jobs de musica
@@ -148,6 +148,7 @@ src/
     voice/        STT, TTS e stop global
   providers/      adapters LLM
   utils/          texto, stream, tags e UI de terminal
+control_panel/    frontend Tauri/React
 ```
 
 ---
@@ -275,22 +276,16 @@ Para o setup minimo, apenas `GROQ_API_KEY` e obrigatoria. O TTS publico default 
 
 ## Como Rodar
 
-### Terminal runtime
+### Runtime + Control Center
 
 ```bash
 python main.py
 ```
 
-### Control Center
-
-```bash
-python -m src.gui.hana_gui
-```
-
 ### GUI sem terminal visivel
 
 ```bash
-cscript //nologo run_hana_gui_hidden.vbs
+wscript run_hana_gui_hidden.vbs
 ```
 
 ---
@@ -386,7 +381,6 @@ A GUI tambem aceita arrastar arquivos direto no chat, entao a inbox e util, mas 
 
 ```bash
 python main.py
-python -m src.gui.hana_gui
 python -m compileall main.py src
 python -m pytest -q
 ```

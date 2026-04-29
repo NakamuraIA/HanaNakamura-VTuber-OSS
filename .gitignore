@@ -2,6 +2,9 @@
 __pycache__/
 *.py[cod]
 *$py.class
+.pytest_cache/
+.pytest_tmp/
+pytest_*_tmp/
 
 # OS generated files
 .DS_Store
@@ -16,8 +19,24 @@ ENV/
 env.bak/
 venv.bak/
 
+# Node / Tauri
+node_modules/
+/package.json
+/package-lock.json
+control_panel/node_modules/
+control_panel/dist/
+control_panel/src-tauri/target/
+control_panel/src-tauri/gen/
+control_panel/src-tauri/.tauri/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
 # Credentials and Sensitive Files
 .env
+.env.*
+!.env.example
 src/config/service_account.json
 src/config/service_account_*.json
 src/config/config.json
@@ -39,10 +58,15 @@ data/cache/
 temp/ultima_visao.png
 ideias_para_atualização/
 data/memory/
+data/characters/**
+!data/characters/
+!data/characters/.gitkeep
 
 # Log files
 *.log
 logs/
+*.pid
+*.pdb
 
 # IDE files
 .vscode/
