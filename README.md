@@ -95,6 +95,7 @@ O projeto nao e so um chatbot: ele combina runtime de voz, painel GUI, memoria h
 
 ---
 
+
 ## Dois Modos, Dois Contratos
 
 ### Terminal Runtime
