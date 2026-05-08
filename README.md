@@ -16,6 +16,7 @@
   <p>
     <a href="#visao-geral">Visao geral</a> ·
     <a href="#showcase-da-hana">Showcase</a> ·
+    <a href="#demo-em-video">Demo em Vídeo</a> ·
     <a href="#arquitetura">Arquitetura</a> ·
     <a href="#instalacao">Instalacao</a> ·
     <a href="#roadmap">Roadmap</a>
@@ -26,9 +27,9 @@
 
 ## Visao Geral
 
-**Hana AM Nakamura** e uma assistente VTuber feita para rodar no desktop do Windows, conversar por voz, lembrar contexto, controlar ferramentas locais e funcionar como uma personagem viva em volta do seu PC.
+**Hana AM Nakamura** e uma assistente VTuber feita para rodar no desktop do Windows, conversar por voz, lembrar contexto, controlar ferramentas locais e funcionar como uma personagem viva em volta[...]
 
-O projeto nao e so um chatbot: ele combina runtime de voz, painel GUI, memoria hibrida, geracao de imagem/musica, analise de arquivos, controle do PC por tags XML, VTube Studio e multiplos providers de LLM/TTS.
+O projeto nao e so um chatbot: ele combina runtime de voz, painel GUI, memoria hibrida, geracao de imagem/musica, analise de arquivos, controle do PC por tags XML, VTube Studio e multiplos provide[...]
 
 > O terminal e o modo "ao vivo": respostas curtas, falaveis e economicas para TTS.
 > A GUI e o modo "chat completo": respostas maiores, anexos, markdown, arquivos e midia inline.
@@ -57,6 +58,17 @@ O projeto nao e so um chatbot: ele combina runtime de voz, painel GUI, memoria h
     </td>
   </tr>
 </table>
+
+---
+
+## Demo Em Video
+
+<div align="center">
+  <a href="https://youtu.be/pcWB9_uL01Q?si=db6SUZbN01kd8Anv" target="_blank">
+    <img src="https://img.youtube.com/vi/pcWB9_uL01Q/0.jpg" alt="Hana VTuber Demo" width="560" style="border-radius: 12px; cursor: pointer;">
+  </a>
+  <p><strong>Clique para assistir a demo em vídeo no YouTube</strong></p>
+</div>
 
 ---
 
