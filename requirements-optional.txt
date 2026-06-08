@@ -1,0 +1,28 @@
+# Optional integrations for modules that are disabled by default.
+# Install only when rebuilding voice, media, vision, providers, or web search.
+azure-cognitiveservices-speech==1.48.2
+davey>=0.1,<1
+discord.py[voice]>=2.4,<3
+discord-ext-voice-recv==0.5.2a179
+PyNaCl>=1.5,<2
+edge-tts==7.2.8
+google-cloud-storage>=2.19.0
+google-cloud-texttospeech==2.34.0
+google-genai>=1.68.0
+groq==1.0.0
+keyboard==0.13.5
+mss==9.0.1
+numpy==2.2.6
+openai>=1.111.0
+Pillow==10.4.0
+PyAudio==0.2.14
+pygame==2.6.1
+python-dotenv==1.2.1
+pyvts==0.3.3
+scikit-learn>=1.0
+sounddevice==0.5.5
+tavily-python==0.7.23
+
+# Optional local semantic memory. Keep disabled unless HANA_MEMORY_SEMANTIC=1.
+fastembed>=0.8,<0.9
+sqlite-vec>=0.1.9,<0.2

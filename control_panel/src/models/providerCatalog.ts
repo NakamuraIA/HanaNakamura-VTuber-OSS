@@ -1,0 +1,281 @@
+export interface ModelSpec {
+  id: string;
+  label: string;
+  provider: string;
+  supportsVision: boolean;
+  supportsDocuments?: boolean;
+  supportsTools?: boolean;
+  supportsNativeSearch?: boolean;
+  inputModalities?: string[];
+  outputModalities?: string[];
+  supportedParameters?: string[];
+  maxInputTokens?: number;
+  maxOutputTokens?: number;
+  pricing?: Record<string, string>;
+  free?: boolean;
+  description?: string;
+  custom?: boolean;
+}
+
+export interface VoiceSpec {
+  id: string;
+  label: string;
+  provider: string;
+  supportsRate?: boolean;
+  supportsPitch?: boolean;
+  pitchMode?: string;
+}
+
+// Fallback catalog used when the backend is offline.
+export const LLM_PROVIDERS = ["gemini_api", "openrouter", "groq"];
+export const TTS_PROVIDERS = ["google_cloud_tts", "gemini_tts", "edge", "azure", "cartesia", "minimax", "elevenlabs"];
+export const STT_PROVIDERS = ["groq_whisper", "gemini_audio", "local", "openai"];
+export const TERMINAL_TTS_PROVIDERS = ["edge", "gemini_tts", "google_cloud_tts", "cartesia", "azure", "minimax", "elevenlabs"];
+
+export const MODEL_CATALOG: ModelSpec[] = [
+  {
+    id: "gemini-3.1-pro-preview",
+    label: "Gemini 3.1 Pro Preview",
+    provider: "gemini_api",
+    supportsVision: true,
+    supportsNativeSearch: true,
+    inputModalities: ["text", "code", "image", "audio", "video", "pdf"],
+    outputModalities: ["text"],
+    maxInputTokens: 1_048_576,
+    maxOutputTokens: 65_536,
+  },
+  {
+    id: "gemini-3.5-flash",
+    label: "Gemini 3.5 Flash",
+    provider: "gemini_api",
+    supportsVision: true,
+    supportsNativeSearch: true,
+    inputModalities: ["text", "code", "image", "audio", "video", "pdf"],
+    outputModalities: ["text"],
+    maxInputTokens: 1_048_576,
+    maxOutputTokens: 65_536,
+  },
+  {
+    id: "gemini-2.5-pro",
+    label: "Gemini 2.5 Pro",
+    provider: "gemini_api",
+    supportsVision: true,
+    supportsNativeSearch: true,
+    inputModalities: ["text", "code", "image", "audio", "video"],
+    outputModalities: ["text"],
+    maxInputTokens: 1_048_576,
+    maxOutputTokens: 65_535,
+  },
+  {
+    id: "gemini-3-flash-preview",
+    label: "Gemini 3 Flash Preview",
+    provider: "gemini_api",
+    supportsVision: true,
+    supportsNativeSearch: true,
+    inputModalities: ["text", "code", "image", "audio", "video", "pdf"],
+    outputModalities: ["text"],
+    maxInputTokens: 1_048_576,
+    maxOutputTokens: 65_536,
+  },
+  {
+    id: "gemini-2.5-flash",
+    label: "Gemini 2.5 Flash",
+    provider: "gemini_api",
+    supportsVision: true,
+    supportsNativeSearch: true,
+    inputModalities: ["text", "code", "image", "audio", "video"],
+    outputModalities: ["text"],
+    maxInputTokens: 1_048_576,
+    maxOutputTokens: 65_535,
+  },
+  {
+    id: "gemini-3.1-flash-lite",
+    label: "Gemini 3.1 Flash Lite",
+    provider: "gemini_api",
+    supportsVision: true,
+    supportsNativeSearch: true,
+    inputModalities: ["text", "code", "image", "audio", "video", "pdf"],
+    outputModalities: ["text"],
+    maxInputTokens: 1_048_576,
+    maxOutputTokens: 65_535,
+  },
+  {
+    id: "gemini-2.5-flash-lite",
+    label: "Gemini 2.5 Flash Lite",
+    provider: "gemini_api",
+    supportsVision: true,
+    supportsNativeSearch: true,
+    inputModalities: ["text", "code", "image", "audio", "video"],
+    outputModalities: ["text"],
+    maxInputTokens: 1_048_576,
+    maxOutputTokens: 65_535,
+  },
+  {
+    id: "llama-3.3-70b-versatile",
+    label: "Llama 3.3 70B",
+    provider: "groq",
+    supportsVision: false,
+    supportsTools: false,
+    supportsNativeSearch: false,
+    inputModalities: ["text"],
+    outputModalities: ["text"],
+    maxInputTokens: 131_072,
+    maxOutputTokens: 32_768,
+    pricing: { prompt: "0.59", completion: "0.79" },
+  },
+  {
+    id: "llama-3.1-8b-instant",
+    label: "Llama 3.1 8B Instant",
+    provider: "groq",
+    supportsVision: false,
+    supportsTools: false,
+    supportsNativeSearch: false,
+    inputModalities: ["text"],
+    outputModalities: ["text"],
+    maxInputTokens: 131_072,
+    maxOutputTokens: 131_072,
+    pricing: { prompt: "0.05", completion: "0.08" },
+  },
+  {
+    id: "openai/gpt-oss-120b",
+    label: "GPT OSS 120B",
+    provider: "groq",
+    supportsVision: false,
+    supportsTools: true,
+    supportsNativeSearch: false,
+    inputModalities: ["text"],
+    outputModalities: ["text"],
+    supportedParameters: ["tools", "tool_choice"],
+    maxInputTokens: 131_072,
+    maxOutputTokens: 65_536,
+    pricing: { prompt: "0.15", completion: "0.60" },
+  },
+  {
+    id: "openai/gpt-oss-20b",
+    label: "GPT OSS 20B",
+    provider: "groq",
+    supportsVision: false,
+    supportsTools: true,
+    supportsNativeSearch: false,
+    inputModalities: ["text"],
+    outputModalities: ["text"],
+    supportedParameters: ["tools", "tool_choice"],
+    maxInputTokens: 131_072,
+    maxOutputTokens: 65_536,
+    pricing: { prompt: "0.075", completion: "0.30" },
+  },
+  {
+    id: "qwen/qwen3-32b",
+    label: "Qwen3 32B",
+    provider: "groq",
+    supportsVision: false,
+    supportsTools: true,
+    supportsNativeSearch: false,
+    inputModalities: ["text"],
+    outputModalities: ["text"],
+    supportedParameters: ["tools", "tool_choice"],
+    maxInputTokens: 131_072,
+    maxOutputTokens: 40_960,
+    pricing: { prompt: "0.29", completion: "0.59" },
+  },
+  {
+    id: "meta-llama/llama-4-scout-17b-16e-instruct",
+    label: "Llama 4 Scout 17B 16E",
+    provider: "groq",
+    supportsVision: true,
+    supportsTools: true,
+    supportsNativeSearch: false,
+    inputModalities: ["text", "image"],
+    outputModalities: ["text"],
+    supportedParameters: ["tools", "tool_choice"],
+    maxInputTokens: 131_072,
+    maxOutputTokens: 8_192,
+    pricing: { prompt: "0.11", completion: "0.34" },
+  },
+  {
+    id: "groq/compound",
+    label: "Compound",
+    provider: "groq",
+    supportsVision: false,
+    supportsTools: false,
+    supportsNativeSearch: true,
+    inputModalities: ["text"],
+    outputModalities: ["text"],
+    maxInputTokens: 131_072,
+    maxOutputTokens: 8_192,
+  },
+  {
+    id: "groq/compound-mini",
+    label: "Compound Mini",
+    provider: "groq",
+    supportsVision: false,
+    supportsTools: false,
+    supportsNativeSearch: true,
+    inputModalities: ["text"],
+    outputModalities: ["text"],
+    maxInputTokens: 131_072,
+    maxOutputTokens: 8_192,
+  },
+];
+
+export const VOICE_CATALOG: VoiceSpec[] = [
+  // Google Cloud TTS
+  { id: "pt-BR-Neural2-C", label: "Google Cloud Neural2 C", provider: "google_cloud_tts" },
+  { id: "pt-BR-Neural2-A", label: "Google Cloud Neural2 A", provider: "google_cloud_tts" },
+  { id: "pt-BR-Wavenet-A", label: "Google Cloud Wavenet A", provider: "google_cloud_tts" },
+  { id: "pt-BR-Standard-A", label: "Google Cloud Standard A", provider: "google_cloud_tts" },
+
+  // Cartesia (ultra low latency ~50-100ms, competitive price, high quality pt-BR)
+  // These are confirmed good *native* Brazilian Portuguese (pt-BR) female voices with authentic accent.
+  // (Previous English voice examples caused "American accent" complaints.)
+  // More at https://play.cartesia.ai (filter Language=Portuguese (Brazil) + Female)
+  { id: "700d1ee3-a641-4018-ba6e-899dcadc9e2b", label: "Cartesia Luana (pt-BR female public speaker - native)", provider: "cartesia" },
+  { id: "1cf751f6-8749-43ab-98bd-230dd633abdb", label: "Cartesia Ana Paula (pt-BR female marketer - native)", provider: "cartesia" },
+  { id: "d4b44b9a-82bc-4b65-b456-763fce4c52f9", label: "Cartesia Beatriz (pt-BR female support - native)", provider: "cartesia" },
+  { id: "c9611be8-aae9-4a93-bb1c-98dd6b7d52a4", label: "Cartesia Isabella (pt-BR female storyteller - native)", provider: "cartesia" },
+  { id: "f39bf583-3b3d-402f-9ffb-6179d9ec3e35", label: "Cartesia Isabel (pt-BR female confident - native)", provider: "cartesia" },
+  { id: "8d826d43-20ad-4c56-8d37-1048eccca1bf", label: "Cartesia Larissa (pt-BR female bright - native)", provider: "cartesia" },
+  { id: "2f4d204f-a5dc-4196-81bc-155986b76ab6", label: "Cartesia Mirella (pt-BR female upbeat - native)", provider: "cartesia" },
+  { id: "pt-BR-FranciscaNeural", label: "Azure Francisca (pt-BR female - excellent native Brazilian)", provider: "azure" },
+  { id: "pt-BR-ThalitaNeural", label: "Azure Thalita (pt-BR female - warm native Brazilian)", provider: "azure" },
+  { id: "Portuguese_ConfidentWoman", label: "Minimax Portuguese Confident Woman (pt-BR female)", provider: "minimax" },
+  { id: "Portuguese_LovelyLady", label: "Minimax Portuguese Lovely Lady (pt-BR female)", provider: "minimax" },
+  { id: "JBFqnCBsd6RMkjVDRZzb", label: "ElevenLabs documented sample voice", provider: "elevenlabs" },
+
+  // Edge (Free/Browser)
+  { id: "pt-BR-AntonioNeural", label: "Edge Antonio", provider: "edge" },
+  { id: "pt-BR-FranciscaNeural", label: "Edge Francisca", provider: "edge" },
+  { id: "pt-BR-ThalitaNeural", label: "Edge Thalita", provider: "edge" },
+
+  // Gemini API TTS
+  { id: "Zephyr", label: "Gemini Zephyr", provider: "gemini_tts" },
+  { id: "Puck", label: "Gemini Puck", provider: "gemini_tts" },
+  { id: "Charon", label: "Gemini Charon", provider: "gemini_tts" },
+  { id: "Kore", label: "Gemini Kore", provider: "gemini_tts" },
+  { id: "Fenrir", label: "Gemini Fenrir", provider: "gemini_tts" },
+  { id: "Leda", label: "Gemini Leda", provider: "gemini_tts" },
+  { id: "Orus", label: "Gemini Orus", provider: "gemini_tts" },
+  { id: "Aoede", label: "Gemini Aoede", provider: "gemini_tts" },
+  { id: "Callirrhoe", label: "Gemini Callirrhoe", provider: "gemini_tts" },
+  { id: "Autonoe", label: "Gemini Autonoe", provider: "gemini_tts" },
+  { id: "Enceladus", label: "Gemini Enceladus", provider: "gemini_tts" },
+  { id: "Iapetus", label: "Gemini Iapetus", provider: "gemini_tts" },
+  { id: "Umbriel", label: "Gemini Umbriel", provider: "gemini_tts" },
+  { id: "Algieba", label: "Gemini Algieba", provider: "gemini_tts" },
+  { id: "Despina", label: "Gemini Despina", provider: "gemini_tts" },
+  { id: "Erinome", label: "Gemini Erinome", provider: "gemini_tts" },
+  { id: "Algenib", label: "Gemini Algenib", provider: "gemini_tts" },
+  { id: "Rasalgethi", label: "Gemini Rasalgethi", provider: "gemini_tts" },
+  { id: "Laomedeia", label: "Gemini Laomedeia", provider: "gemini_tts" },
+  { id: "Achernar", label: "Gemini Achernar", provider: "gemini_tts" },
+  { id: "Alnilam", label: "Gemini Alnilam", provider: "gemini_tts" },
+  { id: "Schedar", label: "Gemini Schedar", provider: "gemini_tts" },
+  { id: "Gacrux", label: "Gemini Gacrux", provider: "gemini_tts" },
+  { id: "Pulcherrima", label: "Gemini Pulcherrima", provider: "gemini_tts" },
+  { id: "Achird", label: "Gemini Achird", provider: "gemini_tts" },
+  { id: "Zubenelgenubi", label: "Gemini Zubenelgenubi", provider: "gemini_tts" },
+  { id: "Vindemiatrix", label: "Gemini Vindemiatrix", provider: "gemini_tts" },
+  { id: "Sadachbia", label: "Gemini Sadachbia", provider: "gemini_tts" },
+  { id: "Sadaltager", label: "Gemini Sadaltager", provider: "gemini_tts" },
+  { id: "Sulafat", label: "Gemini Sulafat", provider: "gemini_tts" },
+];

@@ -1,0 +1,139 @@
+@import "tailwindcss";
+@plugin "@tailwindcss/typography";
+
+:root {
+  /* Cores Base e Gradientes Futuristas */
+  --bg-opacity: 1;
+  --bg-darkest-rgb: 6, 6, 9;
+  --bg-darkest: rgba(var(--bg-darkest-rgb), var(--bg-opacity));
+  --bg-sidebar: rgba(10, 10, 15, calc(var(--bg-opacity) * 0.6));
+  /* Neutral slate borders (less purple/blue, calmer base). Accents stay neon. */
+  --border-strong: rgba(148, 163, 184, 0.14);
+  --border-glow: rgba(148, 163, 184, 0.28);
+
+  --purple-neon: #c084fc;
+  --purple-glow: #a855f7;
+  --purple-dark: rgba(100, 116, 139, 0.12);
+  
+  --cyan-neon: #22d3ee;
+  --blue-neon: #3b82f6;
+  --red-neon: #ef4444;
+
+  --text-primary: #f8fafc;
+  --text-secondary: #cbd5e1;
+  --text-muted: #64748b;
+
+  /* ===== Tokens semânticos da marca Hana (Entrega 1) ===================== *
+   * Use SEMPRE estes em vez de cores cruas (text-cyan-300, pink-500, #050608).
+   * Nomeados por FUNÇÃO, não por cor — assim o seletor de tema muda tudo junto. */
+
+  /* Acentos (seguem o tema escolhido na Personalização) */
+  --accent: var(--purple-neon);
+  --accent-2: var(--cyan-neon);
+
+  /* Cores semânticas */
+  --success: #34d399;
+  --warning: #fbbf24;
+  --danger: #f87171;
+  --info: var(--cyan-neon);
+
+  /* Superfícies (camadas de fundo, do mais fundo ao mais alto) */
+  --surface-0: rgba(var(--bg-darkest-rgb), 0.0);   /* transparente sobre o fundo */
+  --surface-1: rgba(0, 0, 0, 0.40);                /* card padrão */
+  --surface-2: rgba(255, 255, 255, 0.03);          /* sub-bloco / input */
+  --surface-3: rgba(255, 255, 255, 0.06);          /* hover / destaque */
+
+  /* Raio e espaçamento padrão */
+  --radius-card: 1rem;       /* 16px - cards */
+  --radius-control: 0.5rem;  /* 8px - botões/inputs/pills */
+  --space-card: 1.5rem;      /* padding interno padrão de card */
+
+  /* Elevação */
+  --elev-card: 0 10px 30px rgba(0, 0, 0, 0.35);
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  /* Background agora fica a cargo do CyberBackground.tsx para efeitos 3D, mas mantemos fallback aqui */
+  background-color: var(--bg-darkest);
+  color: var(--text-primary);
+  font-family: 'Inter', 'Segoe UI', sans-serif;
+  overflow: hidden;
+}
+
+/* Native <select> dropdowns: force dark rendering so the option list isn't the
+   ugly gray-on-gray default. Cheap global polish (no custom component needed). */
+:root {
+  color-scheme: dark;
+}
+select option {
+  background-color: #0f0f13;
+  color: var(--text-secondary);
+}
+select option:checked {
+  background-color: var(--purple-dark);
+  color: var(--text-primary);
+}
+
+/* Efeito Glow para Cards e Botões */
+.glow-border {
+  position: relative;
+}
+.glow-border::before {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(45deg, var(--purple-neon), var(--cyan-neon), transparent);
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  opacity: 0.3;
+  transition: opacity 0.3s ease;
+}
+.glow-border:hover::before {
+  opacity: 1;
+}
+
+/* Animações CSS Globais */
+@keyframes fadeInSlideUp {
+  from { opacity: 0; transform: translateY(15px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-fade-in {
+  animation: fadeInSlideUp 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@keyframes pulse-glow {
+  0%, 100% { box-shadow: 0 0 15px var(--purple-dark); }
+  50% { box-shadow: 0 0 30px rgba(168, 85, 247, 0.4); }
+}
+
+.hover-glow:hover {
+  animation: pulse-glow 2s infinite ease-in-out;
+}
+
+@keyframes spin-slow {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+.animate-spin-slow {
+  animation: spin-slow 3s linear infinite;
+}
+
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+}
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background-color: var(--border-strong);
+  border-radius: 10px;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background-color: var(--text-muted);
+}

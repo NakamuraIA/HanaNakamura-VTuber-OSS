@@ -1,0 +1,48 @@
+[project]
+name = "hana-agent-oss"
+version = "0.1.0"
+description = "Modular autonomous agent framework foundation for Hana Nakamura."
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.110.0",
+  "httpx>=0.27.0",
+  "mcp>=1.27.1,<2",
+  "uvicorn>=0.29.0",
+  "psutil>=5.9.0"
+]
+license = { text = "AGPL-3.0-only" }
+authors = [
+  { name = "NakamuraIA" }
+]
+
+[project.optional-dependencies]
+integrations = [
+  "azure-cognitiveservices-speech==1.48.2",
+  "discord.py[voice]>=2.4,<3",
+  "discord-ext-voice-recv==0.5.2a179",
+  "edge-tts==7.2.8",
+  "google-cloud-storage>=2.19.0",
+  "google-cloud-texttospeech==2.34.0",
+  "google-genai>=1.68.0",
+  "groq==1.0.0",
+  "keyboard==0.13.5",
+  "mss==9.0.1",
+  "numpy==2.2.6",
+  "openai>=1.111.0",
+  "Pillow==10.4.0",
+  "PyAudio==0.2.14",
+  "pygame==2.6.1",
+  "python-dotenv==1.2.1",
+  "pyvts==0.3.3",
+  "scikit-learn>=1.0",
+  "sounddevice==0.5.5",
+  "tavily-python==0.7.23"
+]
+"semantic-memory" = [
+  "fastembed>=0.8,<0.9",
+  "sqlite-vec>=0.1.9,<0.2"
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

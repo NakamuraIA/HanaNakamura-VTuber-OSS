@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hana-agent-oss.local/contracts/module_manifest.schema.json",
+  "title": "Hana Agent OSS Module Manifest",
+  "type": "object",
+  "required": ["id", "name", "type", "version", "capabilities", "entrypoint"],
+  "properties": {
+    "id": { "type": "string", "minLength": 1 },
+    "name": { "type": "string", "minLength": 1 },
+    "type": {
+      "type": "string",
+      "enum": ["tool", "module", "integration", "subbrain", "external_process", "plugin", "channel", "adapter"]
+    },
+    "version": { "type": "string", "minLength": 1 },
+    "description": { "type": "string" },
+    "capabilities": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "entrypoint": {
+      "type": "object",
+      "required": ["kind"],
+      "properties": {
+        "kind": { "type": "string", "enum": ["python", "http", "stdio", "websocket", "node", "rust"] },
+        "module": { "type": "string" },
+        "url": { "type": "string" },
+        "command": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": true
+    },
+    "permissions": {
+      "type": "object",
+      "properties": {
+        "risk": { "type": "string", "enum": ["low", "medium", "high", "critical"] },
+        "requires_user_enable": { "type": "boolean" }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}
+

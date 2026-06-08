@@ -1,0 +1,920 @@
+from __future__ import annotations
+
+import asyncio
+import base64
+import binascii
+import json
+import os
+import urllib.error
+import urllib.request
+from pathlib import Path
+from typing import Any, AsyncGenerator, Callable
+
+from hana_agent_oss.api.services.unified_history import channel_style_hint
+from hana_agent_oss.persona import build_provider_system_prompt
+from hana_agent_oss.providers.contracts import ProviderRequest, ProviderResponse
+from hana_agent_oss.providers.provider_selector.openrouter.catalog import (
+    OPENROUTER_BASE_URL,
+    get_openrouter_model,
+    openrouter_headers,
+)
+# Image provider integration: image XML tool instructions for all LLM providers.
+from hana_agent_oss.modules.vision.image_provider import normalize_image_provider
+from hana_agent_oss.api.services.agent_jobs import agent_job_cancel as run_agent_job_cancel, get_agent_job_manager
+from hana_agent_oss.tools.mcp_provider_tools import extract_sources_from_mcp, mcp_openai_runners, mcp_openai_schemas
+from hana_agent_oss.tools.omni_tools import omni_supervise as run_omni_supervise
+
+
+OPENROUTER_CHAT_COMPLETIONS_URL = f"{OPENROUTER_BASE_URL}/chat/completions"
+OPENROUTER_HTTP_TIMEOUT_SECONDS = 120
+OPENROUTER_TOOL_ROUNDS = 5
+SUPPORTED_TEXT_ATTACHMENT_TYPES = {
+    "text/plain",
+    "text/markdown",
+    "text/csv",
+    "application/json",
+    "application/xml",
+}
+
+
+class OpenRouterProvider:
+    """OpenRouter LLM provider using the OpenAI-compatible Chat Completions API."""
+
+    aliases = {"openrouter", "open_router"}
+    provider_id = "openrouter"
+    provider_label = "OpenRouter"
+    api_key_env = "OPENROUTER_API_KEY"
+    default_model = "openrouter/auto"
+    chat_completions_url = OPENROUTER_CHAT_COMPLETIONS_URL
+    http_timeout_seconds = OPENROUTER_HTTP_TIMEOUT_SECONDS
+    tool_rounds = OPENROUTER_TOOL_ROUNDS
+    supports_plugins = True
+    provider_status_title = "OPENROUTER PROVIDER STATUS"
+
+    async def generate_stream(self, request: ProviderRequest) -> AsyncGenerator[str, None]:
+        """Stream tokens from OpenRouter as an async generator of text chunks."""
+        api_key = os.environ.get(self.api_key_env)
+        if not api_key:
+            yield "[ERRO: missing_credentials]"
+            return
+
+        model = (request.model or "").strip() or self.default_model
+        model_info = self._custom_model_info(request.memory, model) or self._catalog_model(model)
+        supports_tools = bool(model_info and model_info.get("supportsTools"))
+
+        try:
+            messages, plugins = self._build_messages(request, model_info=model_info)
+        except ValueError as exc:
+            yield f"[ERRO: {exc}]"
+            return
+        except Exception as exc:
+            yield f"[ERRO: {self.provider_id}_attachment_error:{exc}]"
+            return
+
+        tools, runners = self._tool_schemas_and_runners(request, supports_tools=supports_tools)
+        system_prompt = self._system_prompt(
+            request,
+            model_info=model_info,
+            tools_enabled=bool(tools),
+            tools_supported=supports_tools,
+        )
+        messages.insert(0, {"role": "system", "content": system_prompt})
+
+        payload_base: dict[str, Any] = {
+            "model": model,
+            "messages": messages,
+            "temperature": request.temperature,
+            "stream": True,
+        }
+        provider_routing = self._provider_routing_payload(request.openrouter_routing)
+        if provider_routing:
+            payload_base["provider"] = provider_routing
+        if plugins and self.supports_plugins:
+            payload_base["plugins"] = plugins
+        if tools:
+            payload_base["tools"] = tools
+            payload_base["tool_choice"] = "auto"
+
+        body = json.dumps(payload_base).encode("utf-8")
+        req = urllib.request.Request(
+            self.chat_completions_url,
+            data=body,
+            headers=self._headers(),
+            method="POST",
+        )
+
+        # Run blocking HTTP in thread to avoid freezing the async event loop
+        loop = asyncio.get_running_loop()
+        try:
+            response = await loop.run_in_executor(
+                None,
+                lambda: urllib.request.urlopen(req, timeout=self.http_timeout_seconds),
+            )
+            buffer = ""
+            tool_call_detected = False
+            done = False
+            while not done:
+                chunk = await loop.run_in_executor(None, response.read, 4096)
+                if not chunk:
+                    break
+                decoded = chunk.decode("utf-8", errors="replace")
+                buffer += decoded
+                lines = buffer.split("\n")
+                buffer = lines.pop() if not buffer.endswith("\n") else ""
+
+                for line in lines:
+                    line = line.strip()
+                    if not line or line.startswith(":"):
+                        continue
+                    if line == "data: [DONE]":
+                        done = True
+                        break
+                    if not line.startswith("data: "):
+                        continue
+                    try:
+                        data = json.loads(line[6:])
+                    except json.JSONDecodeError:
+                        continue
+                    choices = data.get("choices") or []
+                    if not choices or not isinstance(choices, list):
+                        continue
+                    delta = choices[0].get("delta", {}) or {}
+
+                    # Real tool-call detection: OpenRouter streams tool calls in
+                    # delta.tool_calls (not delta.content). When one appears, stop
+                    # streaming partial text and delegate to the non-streaming loop,
+                    # which executes the tool rounds and returns the final answer.
+                    if tools and runners and delta.get("tool_calls"):
+                        tool_call_detected = True
+                        done = True
+                        break
+
+                    content = delta.get("content") or ""
+                    if content:
+                        yield content
+
+            # A tool call was requested mid-stream: run the full agentic loop.
+            if tool_call_detected:
+                try:
+                    response.close()
+                except Exception:
+                    pass
+                if request.on_activity is not None:
+                    await request.on_activity({
+                        "event": "tools_started",
+                        "label": "Hana está usando ferramentas",
+                        "detail": "Executando pesquisas e ações antes da resposta final.",
+                    })
+                full_response = await loop.run_in_executor(
+                    None,
+                    lambda: self._run_completion_loop(
+                        model=model,
+                        messages=messages,
+                        temperature=request.temperature,
+                        plugins=plugins,
+                        tools=tools,
+                        tool_runners=runners,
+                        memory=request.memory,
+                        tool_runs=request.tool_runs,
+                        provider_routing=request.openrouter_routing,
+                    ),
+                )
+                final_text = self._response_text(full_response)
+                if request.on_activity is not None:
+                    tool_count = len(request.tool_runs)
+                    await request.on_activity({
+                        "event": "tools_finished",
+                        "label": f"{tool_count} chamada{'s' if tool_count != 1 else ''} concluída{'s' if tool_count != 1 else ''}",
+                        "detail": "Preparando a resposta final.",
+                    })
+                if final_text:
+                    yield final_text
+                return
+        except Exception as exc:
+            yield f"[ERRO: {exc}]"
+
+    def generate(self, request: ProviderRequest) -> ProviderResponse:
+        api_key = os.environ.get(self.api_key_env)
+        if not api_key:
+            return ProviderResponse(ok=False, error=f"missing_credentials:{self.api_key_env}")
+
+        model = (request.model or "").strip() or self.default_model
+        # Prefer custom model overrides (from UI) over catalog for supports etc.
+        model_info = self._custom_model_info(request.memory, model) or self._catalog_model(model)
+        supports_tools = bool(model_info and model_info.get("supportsTools"))
+
+        try:
+            messages, plugins = self._build_messages(request, model_info=model_info)
+        except ValueError as exc:
+            return ProviderResponse(ok=False, error=str(exc))
+        except Exception as exc:  # noqa: BLE001
+            return ProviderResponse(ok=False, error=f"{self.provider_id}_attachment_error:{exc}")
+
+        tools, runners = self._tool_schemas_and_runners(request, supports_tools=supports_tools)
+        system_prompt = self._system_prompt(
+            request,
+            model_info=model_info,
+            tools_enabled=bool(tools),
+            tools_supported=supports_tools,
+        )
+        messages.insert(0, {"role": "system", "content": system_prompt})
+
+        meta: dict[str, Any] = {
+            "provider": self.provider_id,
+            "nativeSearch": False,
+            "model": model,
+            "attachments": self._attachment_meta(request.attachments),
+            "capabilities": self._capabilities_payload(model_info),
+        }
+
+        try:
+            response_data = self._run_completion_loop(
+                model=model,
+                messages=messages,
+                temperature=request.temperature,
+                plugins=plugins,
+                tools=tools,
+                tool_runners=runners,
+                memory=request.memory,
+                tool_runs=request.tool_runs,
+                provider_routing=request.openrouter_routing,
+            )
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace") if exc.fp else str(exc)
+            return ProviderResponse(ok=False, error=f"{self.provider_id}_http_{exc.code}:{detail[:1000]}", meta=meta)
+        except TimeoutError:
+            return ProviderResponse(ok=False, error=f"{self.provider_id}_timeout", meta=meta)
+        except Exception as exc:  # noqa: BLE001
+            return ProviderResponse(ok=False, error=f"{self.provider_id}_provider_error:{exc}", meta=meta)
+
+        text = self._response_text(response_data)
+        usage = response_data.get("usage") if isinstance(response_data, dict) else None
+        if isinstance(usage, dict):
+            meta["usage"] = usage
+            if "total_tokens" in usage:
+                meta["tokens"] = usage.get("total_tokens")
+
+        return ProviderResponse(
+            ok=bool(text),
+            text=text,
+            error=None if text else "empty_provider_response",
+            meta=meta,
+        )
+
+    def _system_prompt(
+        self,
+        request: ProviderRequest,
+        *,
+        model_info: dict[str, Any] | None,
+        tools_enabled: bool,
+        tools_supported: bool,
+    ) -> str:
+        """Build provider-specific instructions without Gemini-only image XML rules."""
+        base = build_provider_system_prompt(self.provider_id)
+        style = channel_style_hint(request.channel)
+        capabilities = self._capabilities_payload(model_info)
+        capability_hint = (
+            f"\n\n[{self.provider_status_title}]\n"
+            f"You are running through {self.provider_label}, not direct Gemini API.\n"
+            "Do not use Gemini Google Search, Gemini Code Execution, Gemini URL Context, or Gemini server-side tools.\n"
+            "Only use actual tool calls provided in this request. Never write pseudo calls such as omni_supervise(...) as visible text.\n"
+            f"Current model capabilities: vision={capabilities['supports_image']}, files={capabilities['supports_pdf']}, tools={capabilities['supports_function_calling']}.\n"
+            "When user sends large text (e.g. news, articles) to 'read' or process directly: just acknowledge internally and respond based on content if relevant. Do NOT output image prompts, XML tags, or unrelated generations. Process as normal conversation input."
+        )
+
+        # Add screen vision behavior hint if screen capture is present in attachments (for call + watching screen use case)
+        has_screen = any(
+            isinstance(item, dict) and str(item.get("name") or "").startswith("screen_capture")
+            for item in (request.attachments or [])
+        )
+        if has_screen and capabilities.get("supports_image"):
+            vision_hint = (
+                "\n\n[INSTRUÇÃO DE VISÃO - REAÇÕES NATURAIS À TELA]\n"
+                "Você tem acesso à tela atual do usuário via anexo de imagem (screen_capture).\n"
+                "Aja de forma natural e integrada: faça comentários, piadas leves, reações sarcásticas ou curiosas sobre o que está acontecendo na tela (jogo, desktop, vídeo, etc).\n"
+                "NÃO faça narração chata tipo 'Estou vendo um navegador aberto...'. Em vez disso, reaja como se estivesse assistindo junto na call.\n"
+                "Mantenha respostas curtas e faláveis. Use o contexto da conversa recente + o que vê na tela."
+            )
+            capability_hint += vision_hint
+        # Inject image XML action manual if an image provider is active (same instructions as Gemini).
+        image_provider_active = self._is_image_provider_active(request.memory)
+        image_instruction = self._image_tool_instruction() if image_provider_active else (
+            "\n\n[IMAGE XML STATUS]\n"
+            "No image generation provider is active. Do not use XML image tags.\n"
+        )
+
+        return (
+            base
+            + capability_hint
+            + image_instruction
+            + self._local_tool_instruction(enabled=tools_enabled, supported=tools_supported)
+            + style
+        )
+
+    @staticmethod
+    def _is_image_provider_active(memory: Any) -> bool:
+        """Check if any image generation provider is configured and active."""
+        if memory is None:
+            return False
+        try:
+            provider = memory.get_setting("image_provider", None)
+            if provider:
+                return True
+            # Default: gemini_api is always available if GOOGLE_API_KEY is set.
+            import os
+            return bool(os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY") or os.environ.get("OPENROUTER_API_KEY"))
+        except Exception:
+            return False
+
+    @classmethod
+    def _image_tool_instruction(cls) -> str:
+        """Build the XML image action guide injected into system prompts (shared with Gemini)."""
+        try:
+            from hana_agent_oss.providers.provider_selector.gemini_api.provider import GeminiApiProvider
+            return GeminiApiProvider._image_tool_instruction()
+        except Exception:
+            # Fallback: minimal image instruction if Gemini provider is unavailable.
+            return (
+                "\n\n[IMAGE XML ACTION MANUAL]\n"
+                "Image generation does not use function calling. To request image work, write one silent XML tag at the end of your answer.\n"
+                "For generic images, use exactly: <gerar_imagem>English prompt for the image</gerar_imagem>.\n"
+                "For generic edits, use exactly: <editar_imagem>English edit instruction</editar_imagem>.\n"
+                "For known characters, use exactly <gerar_imagem_personagem>{valid JSON}</gerar_imagem_personagem>.\n"
+                "For character edits, use exactly <editar_imagem_personagem>{valid JSON}</editar_imagem_personagem>.\n"
+                "Your visible sentence should say that you are starting/preparing the image, not that it is already ready.\n"
+            )
+
+    @staticmethod
+    def _capabilities_payload(model_info: dict[str, Any] | None) -> dict[str, Any]:
+        """Expose OpenRouter model capabilities using the selector capability keys."""
+        input_modalities = model_info.get("inputModalities") if isinstance(model_info, dict) else []
+        return {
+            "multimodal_input": bool(model_info and len(input_modalities) > 1),
+            "supports_image": bool(model_info and model_info.get("supportsVision")),
+            "supports_audio": False,
+            "supports_video": False,
+            "supports_pdf": bool(model_info and model_info.get("supportsDocuments")),
+            "supports_native_web_search": False,
+            "supports_streaming": True,
+            "supports_structured_output": bool(model_info and "response_format" in model_info.get("supportedParameters", [])),
+            "supports_function_calling": bool(model_info and model_info.get("supportsTools")),
+            "supports_code_execution": False,
+            "supports_image_generation": False,
+            "supports_video_generation": False,
+            "supports_tts": False,
+            "supports_live_voice": False,
+            "supports_memory_embeddings": False,
+            "supports_rag": False,
+        }
+
+    def _catalog_model(self, model_id: str) -> dict[str, Any] | None:
+        """Read provider model metadata from the dynamic catalog."""
+        return get_openrouter_model(model_id)
+
+    def _custom_model_info(self, memory: Any, model_id: str) -> dict[str, Any] | None:
+        """Read OpenRouter custom model capabilities persisted by the Control Center."""
+        if memory is None:
+            return None
+        try:
+            custom_models = memory.get_setting("custom_models", []) or []
+        except Exception:
+            return None
+        if not isinstance(custom_models, list):
+            return None
+        for item in custom_models:
+            if not isinstance(item, dict):
+                continue
+            if item.get("provider") == self.provider_id and item.get("id") == model_id:
+                return item
+        return None
+
+    @staticmethod
+    def _decode_attachment(item: dict[str, Any]) -> bytes:
+        """Read an attachment from disk or decode frontend base64/data URL payloads."""
+        if item.get("path"):
+            return Path(str(item.get("path"))).read_bytes()
+        value = str(item.get("data") or "")
+        if "," in value and value.lower().startswith("data:"):
+            value = value.split(",", 1)[1]
+        try:
+            return base64.b64decode(value, validate=False)
+        except binascii.Error as exc:
+            raise ValueError("invalid_base64_attachment") from exc
+
+    @staticmethod
+    def _data_url(mime_type: str, raw: bytes) -> str:
+        """Build a data URL accepted by OpenRouter multimodal content parts."""
+        return f"data:{mime_type};base64,{base64.b64encode(raw).decode('ascii')}"
+
+    def _attachment_parts(self, attachments: list[dict[str, Any]], *, model_info: dict[str, Any] | None) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        """Convert local attachments into OpenRouter content parts and plugins."""
+        parts: list[dict[str, Any]] = []
+        plugins: list[dict[str, Any]] = []
+        known_no_vision = bool(model_info) and not bool(model_info.get("supportsVision"))
+
+        for item in attachments:
+            if not isinstance(item, dict):
+                continue
+            mime_type = str(item.get("type") or "application/octet-stream").strip().lower()
+            filename = str(item.get("name") or "attachment").strip() or "attachment"
+            raw = self._decode_attachment(item)
+            if not raw:
+                raise ValueError("empty_attachment")
+
+            if mime_type.startswith("image/"):
+                if known_no_vision:
+                    # Skip image attachments for models without vision support.
+                    # This prevents errors when visao is enabled but model (e.g. DeepSeek text) can't handle images.
+                    # The text message will proceed without the screen image.
+                    continue
+                parts.append({"type": "image_url", "image_url": {"url": self._data_url(mime_type, raw)}})
+                continue
+
+            if mime_type == "application/pdf":
+                parts.append(
+                    {
+                        "type": "file",
+                        "file": {
+                            "filename": filename,
+                            "file_data": self._data_url(mime_type, raw),
+                        },
+                    }
+                )
+                plugins.append({"id": "file-parser", "pdf": {"engine": "cloudflare-ai"}})
+                continue
+
+            if mime_type in SUPPORTED_TEXT_ATTACHMENT_TYPES or mime_type.startswith("text/"):
+                text = raw.decode("utf-8", errors="replace")
+                parts.append({"type": "text", "text": f"\n\n[Attachment: {filename}]\n{text[:200000]}"})
+                continue
+
+            raise ValueError(f"{self.provider_id}_attachment_type_not_supported:{mime_type}")
+
+        return parts, plugins
+
+    def _build_messages(self, request: ProviderRequest, *, model_info: dict[str, Any] | None) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        """Build OpenRouter messages and attach files only to the latest user turn."""
+        attachment_parts, plugins = self._attachment_parts(request.attachments, model_info=model_info)
+        messages: list[dict[str, Any]] = []
+        recent_messages = request.messages[-20:]
+
+        for index, msg in enumerate(recent_messages):
+            raw_role = str(msg.get("role") or "user").strip().lower()
+            if raw_role == "system":
+                role = "system"
+            elif raw_role in {"assistant", "model", "hana"}:
+                role = "assistant"
+            else:
+                role = "user"
+            text = str(msg.get("content") or "").strip()
+            is_latest_user = role == "user" and index == len(recent_messages) - 1
+
+            if is_latest_user and attachment_parts:
+                content: list[dict[str, Any]] = []
+                if text:
+                    content.append({"type": "text", "text": text})
+                content.extend(attachment_parts)
+                if not text:
+                    content.insert(0, {"type": "text", "text": "Analise os anexos enviados."})
+                messages.append({"role": "user", "content": content})
+                continue
+
+            if text:
+                messages.append({"role": role, "content": text})
+
+        if not messages and attachment_parts:
+            messages.append({"role": "user", "content": [{"type": "text", "text": "Analise os anexos enviados."}, *attachment_parts]})
+
+        return messages, plugins
+
+    @staticmethod
+    def _attachment_meta(attachments: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return [
+            {
+                "name": str(item.get("name") or "attachment"),
+                "type": str(item.get("type") or "application/octet-stream"),
+                "size": int(item.get("size") or 0),
+            }
+            for item in attachments
+            if isinstance(item, dict)
+        ]
+
+    @staticmethod
+    def _safe_int(value: Any, default: int) -> int:
+        """Parse optional numeric tool arguments without letting bad model output crash the provider."""
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+
+    @staticmethod
+    def _tool_arguments(value: Any) -> dict[str, Any]:
+        """Accept OpenRouter tool arguments as either a JSON string or an already-decoded object."""
+        if isinstance(value, dict):
+            return value
+        if isinstance(value, str):
+            try:
+                parsed = json.loads(value or "{}")
+            except json.JSONDecodeError:
+                return {}
+            return parsed if isinstance(parsed, dict) else {}
+        return {}
+
+    @staticmethod
+    def _tool_run_record(name: str, args: dict[str, Any], result: Any) -> dict[str, Any]:
+        """Build a compact, UI-friendly record of one tool execution for the chat card."""
+        ok = bool(result.get("ok", True)) if isinstance(result, dict) else True
+        summary = ""
+        if isinstance(result, dict):
+            summary = str(
+                result.get("error")
+                or result.get("response")
+                or result.get("message")
+                or result.get("summary")
+                or result.get("result")
+                or ""
+            )
+        else:
+            summary = str(result)
+        if len(summary) > 400:
+            summary = summary[:400].rstrip() + "..."
+        query = ""
+        if isinstance(args, dict):
+            query = str(
+                args.get("query")
+                or args.get("q")
+                or args.get("search")
+                or args.get("task")
+                or args.get("url")
+                or args.get("tool")
+                or ""
+            )
+        return {
+            "tool": name,
+            "ok": ok,
+            "summary": summary,
+            "query": query,
+            "sources": extract_sources_from_mcp(result),
+        }
+
+    @staticmethod
+    def _append_terminal_event(memory: Any, *, kind: str, source: str, status: str, tool_name: str, display_text: str, metadata: dict[str, Any]) -> None:
+        """Mirror OpenRouter local tool calls into Terminal Agent events."""
+        if memory is None:
+            return
+        try:
+            from hana_agent_oss.api.services.terminal_agent import append_terminal_event
+
+            append_terminal_event(
+                memory,
+                {
+                    "kind": kind,
+                    "source": source,
+                    "displayText": display_text,
+                    "speechText": "",
+                    "status": status,
+                    "toolName": tool_name,
+                    "metadata": {"tts": False, **metadata},
+                },
+            )
+        except Exception:
+            return
+
+    def _tool_schemas_and_runners(self, request: ProviderRequest, *, supports_tools: bool) -> tuple[list[dict[str, Any]], dict[str, Callable[[dict[str, Any]], dict[str, Any]]]]:
+        """Expose Omni local tools only when config and model capabilities allow it.
+        MC tools are forced in if controller enabled (to support cases where catalog under-reports supportsTools, e.g. Groq gpt-oss models).
+        """
+        connections = {}
+        if request.memory is not None:
+            try:
+                raw = request.memory.get_setting("connections_config", {}) or {}
+                from hana_agent_oss.api.routers.config import normalize_connections_config
+                connections = normalize_connections_config(raw)
+            except Exception:
+                connections = {}
+
+        tools: list[dict[str, Any]] = []
+        runners: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {}
+        tools.extend(mcp_openai_schemas())
+        # tool_runs are captured centrally in _run_completion_loop (covers every tool),
+        # so the MCP runner does not need its own collector here (avoids double-count).
+        runners.update(mcp_openai_runners(request.memory))
+        local_agent_enabled = False
+
+        if not supports_tools:
+            return [], {}
+
+        if bool(connections.get("omni")):
+            omni_url = str(connections.get("omniUrl") or "").strip()
+            tools.append(self._omni_schema())
+            local_agent_enabled = True
+
+            def run_omni(args: dict[str, Any]) -> dict[str, Any]:
+                normalized = {
+                    "task": str(args.get("task") or "").strip(),
+                    "mode": str(args.get("mode") or "inspect").strip().lower(),
+                    "acceptance": str(args.get("acceptance") or "").strip(),
+                    "max_rounds": self._safe_int(args.get("max_rounds") or 3, 3),
+                    "base_url": omni_url,
+                    "_background_job": True,
+                }
+                self._append_terminal_event(
+                    request.memory,
+                    kind="tool_call",
+                    source="omni_bridge",
+                    status="running",
+                    tool_name="omni.supervise",
+                    display_text=f"Delegando tarefa ao Omni ({normalized['mode']}): {normalized['task'][:240]}",
+                    metadata={"mode": normalized["mode"]},
+                )
+                result = run_omni_supervise(normalized)
+                result_dict = result.to_dict()
+                self._append_terminal_event(
+                    request.memory,
+                    kind="tool_result",
+                    source="omni_bridge",
+                    status="success" if result.ok else "failed",
+                    tool_name="omni.supervise",
+                    display_text=str(result.output.get("response") or result.output.get("message") or result.error or "Omni job iniciado."),
+                    metadata={"mode": normalized["mode"], "toolResult": result_dict},
+                )
+                return result_dict
+
+            runners["omni_supervise"] = run_omni
+
+        manager = get_agent_job_manager()
+        has_active_agent_job = bool(manager and [job for job in manager.list_jobs() if job.get("status") in {"queued", "running"}])
+        if local_agent_enabled or has_active_agent_job:
+            tools.append(self._agent_job_cancel_schema())
+
+            def run_agent_cancel(args: dict[str, Any]) -> dict[str, Any]:
+                result = run_agent_job_cancel(
+                    {
+                        "job_id": str(args.get("job_id") or "").strip(),
+                        "agent": str(args.get("agent") or "").strip().lower(),
+                        "active": bool(args.get("active", True)),
+                        "reason": str(args.get("reason") or "user_request").strip() or "user_request",
+                    }
+                )
+                return result.to_dict()
+
+            runners["agent_job_cancel"] = run_agent_cancel
+
+        if not tools and not supports_tools:
+            return [], {}
+
+        return [self._sanitize_tool_schema(schema) for schema in tools], runners
+
+    @classmethod
+    def _sanitize_tool_schema(cls, value: Any) -> Any:
+        """Remove provider-invalid empty enum values from nested tool schemas."""
+        if isinstance(value, list):
+            return [cls._sanitize_tool_schema(item) for item in value]
+        if not isinstance(value, dict):
+            return value
+
+        sanitized: dict[str, Any] = {}
+        for key, item in value.items():
+            if key == "enum" and isinstance(item, list):
+                enum_values = [
+                    cls._sanitize_tool_schema(option)
+                    for option in item
+                    if option is not None and not (isinstance(option, str) and not option.strip())
+                ]
+                if enum_values:
+                    sanitized[key] = enum_values
+                continue
+            sanitized[key] = cls._sanitize_tool_schema(item)
+        return sanitized
+
+    @staticmethod
+    def _omni_schema() -> dict[str, Any]:
+        """Return the OpenAI-compatible function schema for Omni supervision."""
+        return {
+            "type": "function",
+            "function": {
+                "name": "omni_supervise",
+                "description": "Delegate a local PC task to Omni-Agent OS under Hana supervision.",
+                "parameters": {
+                    "type": "object",
+                    "required": ["task"],
+                    "properties": {
+                        "task": {"type": "string"},
+                        "mode": {"type": "string", "enum": ["inspect", "execute", "review"]},
+                        "acceptance": {"type": "string"},
+                        "max_rounds": {"type": "integer"},
+                    },
+                    "additionalProperties": False,
+                },
+            },
+        }
+
+    @staticmethod
+    def _agent_job_cancel_schema() -> dict[str, Any]:
+        """Return the OpenAI-compatible function schema for background job cancellation."""
+        return {
+            "type": "function",
+            "function": {
+                "name": "agent_job_cancel",
+                "description": "Cancel a running Omni background job when Nakamura explicitly asks to stop it.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "job_id": {"type": "string"},
+                        "agent": {"type": "string", "enum": ["omni"]},
+                        "active": {"type": "boolean"},
+                        "reason": {"type": "string"},
+                    },
+                    "additionalProperties": False,
+                },
+            },
+        }
+
+    def _local_tool_instruction(self, *, enabled: bool, supported: bool) -> str:
+        """Explain local tool availability for OpenRouter models."""
+        if not supported:
+            return (
+                "\n\n[LOCAL TOOL STATUS]\n"
+                f"This {self.provider_label} model is not cataloged as supporting tool calls in this turn.\n"
+                "Do not write mcp_discover(...), mcp_invoke(...), omni_supervise(...), pseudo-code, or function-call syntax as visible text.\n"
+                f"If Nakamura asks for MCP, Tavily, or Omni, explain that the selected {self.provider_label} model does not expose tools; she can select a tools-capable model.\n"
+            )
+        if not enabled:
+            return (
+                "\n\n[LOCAL TOOL STATUS]\n"
+                f"The selected {self.provider_label} model supports tools, but no Hana local tools are enabled/configured for this turn.\n"
+                "Do not write mcp_discover(...), mcp_invoke(...), omni_supervise(...) as visible text, and do not claim a tool was called.\n"
+            )
+        return (
+            "\n\n[LOCAL TOOL MANUAL]\n"
+            "Use actual tool calls, never visible pseudo-call text.\n"
+            "Use mcp_discover and mcp_invoke for enabled MCP servers such as Tavily web research; respect backend allowlists and real tool errors.\n"
+            "Use omni_supervise for local PC automation, processes, folders, windows, clipboard, OCR, or general computer tasks. It starts a background job and returns job_id/status=running quickly.\n"
+            
+            "When an Omni tool returns job_id/status=running, tell Nakamura the job started and that the final report will appear in Terminal Agent; do not summarize a result that has not arrived yet.\n"
+            "If Nakamura explicitly asks to stop, cancel, parar, or abort a running Omni job, call agent_job_cancel. Do not treat normal user text as a hidden cancellation trigger.\n"
+            "Do not use local tools for normal chat, STT, TTS, or image generation; use MCP web tools only for explicit external research/current-facts needs.\n"
+            "If a tool returns ok=false, quote the returned error exactly and do not invent a different cause.\n"
+        )
+
+    def _post_chat_completion(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Send one non-streaming Chat Completions request to the provider."""
+        body = json.dumps(payload).encode("utf-8")
+        request = urllib.request.Request(
+            self.chat_completions_url,
+            data=body,
+            headers=self._headers(),
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=self.http_timeout_seconds) as response:
+            raw_body = response.read().decode("utf-8", errors="replace")
+        if not raw_body:
+            return {}
+        try:
+            return json.loads(raw_body)
+        except json.JSONDecodeError as exc:
+            # Include raw body snippet for debugging (e.g. HTML error page or empty)
+            snippet = raw_body[:500].replace("\n", "\\n")
+            raise ValueError(f"invalid_json_response: {exc}. raw_body_starts_with: {snippet!r}") from exc
+
+    def _headers(self) -> dict[str, str]:
+        """Build provider request headers without exposing credentials."""
+        return openrouter_headers(include_auth=True)
+
+    @staticmethod
+    def _provider_routing_payload(routing: dict[str, Any] | None) -> dict[str, Any]:
+        """Convert Hana routing config into OpenRouter's request-level provider object."""
+        if not isinstance(routing, dict) or not routing:
+            return {}
+        preferred = str(routing.get("preferredEndpoint") or "").strip().lower()
+        allow_fallbacks = bool(routing.get("allowFallbacks", True))
+        require_parameters = bool(routing.get("requireParameters", False))
+        data_collection = "deny" if routing.get("dataCollection") == "deny" else "allow"
+        zdr = bool(routing.get("zdr", False))
+        # Preserve OpenRouter's original automatic routing path unless the user
+        # explicitly changes at least one routing preference.
+        if not preferred and allow_fallbacks and not require_parameters and data_collection == "allow" and not zdr:
+            return {}
+        payload: dict[str, Any] = {
+            "allow_fallbacks": allow_fallbacks,
+            "require_parameters": require_parameters,
+            "data_collection": data_collection,
+            "zdr": zdr,
+        }
+        if preferred:
+            payload["order"] = [preferred]
+        return payload
+
+    def _run_completion_loop(
+        self,
+        *,
+        model: str,
+        messages: list[dict[str, Any]],
+        temperature: float,
+        plugins: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        tool_runners: dict[str, Callable[[dict[str, Any]], dict[str, Any]]],
+        memory: Any,
+        tool_runs: list[dict[str, Any]] | None = None,
+        provider_routing: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Run a bounded OpenRouter tool-call loop and return the final response.
+
+        When ``tool_runs`` is provided, every executed tool call records a compact
+        run entry ({tool, ok, summary, query, sources}) so the chat can render a
+        tool-activity card. This is the single capture point for all tools
+        (MCP/Tavily, Omni).
+        """
+        payload_base: dict[str, Any] = {
+            "model": model,
+            "messages": messages,
+            "temperature": temperature,
+            "stream": False,
+        }
+        routing_payload = self._provider_routing_payload(provider_routing)
+        if routing_payload:
+            payload_base["provider"] = routing_payload
+        if plugins and self.supports_plugins:
+            payload_base["plugins"] = plugins
+        if tools:
+            payload_base["tools"] = tools
+            payload_base["tool_choice"] = "auto"
+
+        last_response: dict[str, Any] = {}
+        for round_index in range(self.tool_rounds + 1):
+            payload = dict(payload_base)
+            payload["messages"] = messages
+            last_response = self._post_chat_completion(payload)
+            message = self._response_message(last_response)
+            tool_calls = message.get("tool_calls") if isinstance(message, dict) else None
+            if not tool_calls or round_index >= self.tool_rounds:
+                return last_response
+
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": message.get("content") or "",
+                    "tool_calls": tool_calls,
+                }
+            )
+            for tool_call in tool_calls:
+                if not isinstance(tool_call, dict):
+                    continue
+                function = tool_call.get("function") if isinstance(tool_call.get("function"), dict) else {}
+                name = str(function.get("name") or "").strip().replace(".", "_")  # normalize mc.follow -> mc_follow for robustness
+                runner = tool_runners.get(name)
+                args = self._tool_arguments(function.get("arguments"))
+                if runner is None:
+                    result = {"ok": False, "error": f"{self.provider_id}_tool_not_registered:{name}"}
+                else:
+                    result = runner(args)
+                if tool_runs is not None:
+                    tool_runs.append(self._tool_run_record(name, args, result))
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": str(tool_call.get("id") or name),
+                        "name": name,
+                        "content": json.dumps(result, ensure_ascii=False),
+                    }
+                )
+
+        self._append_terminal_event(
+            memory,
+            kind="tool_result",
+            source=self.provider_id,
+            status="failed",
+            tool_name=f"{self.provider_id}.tools",
+            display_text=f"{self.provider_label} atingiu o limite de rodadas de tools.",
+            metadata={"toolRounds": self.tool_rounds},
+        )
+        return last_response
+
+    @staticmethod
+    def _response_message(response_data: dict[str, Any]) -> dict[str, Any]:
+        """Extract the first OpenRouter assistant message."""
+        choices = response_data.get("choices") if isinstance(response_data, dict) else None
+        if not isinstance(choices, list) or not choices:
+            return {}
+        first = choices[0] if isinstance(choices[0], dict) else {}
+        message = first.get("message") if isinstance(first.get("message"), dict) else {}
+        return message
+
+    @classmethod
+    def _response_text(cls, response_data: dict[str, Any]) -> str:
+        """Extract normalized text from OpenRouter chat/non-chat choices."""
+        message = cls._response_message(response_data)
+        content = message.get("content") if isinstance(message, dict) else ""
+        if isinstance(content, str):
+            return content.strip()
+        if isinstance(content, list):
+            parts = [
+                str(part.get("text") or "").strip()
+                for part in content
+                if isinstance(part, dict) and part.get("type") == "text"
+            ]
+            return "\n".join(part for part in parts if part).strip()
+        choices = response_data.get("choices") if isinstance(response_data, dict) else None
+        if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+            return str(choices[0].get("text") or "").strip()
+        return ""
