@@ -33,10 +33,18 @@ AGENT_RUNTIME_DIR = AGENT_ROOT / "runtime"             # agent runtime db + mcp 
 SKILLS_DIR = PROJECT_ROOT / "data" / "skills"
 EXT_SKILLS_DIR = PROJECT_ROOT / "hana_agent" / "skills"
 
+# --- Scripts (executable code Hana writes for herself) ------------------- #
+# Skills (above) are Markdown docs; scripts are the runnable code they point to.
+SCRIPTS_DIR = PROJECT_ROOT / "data" / "scripts"
+
 # --- Persistent memory (project runtime) -------------------------------- #
 MEMORY_DB = PROJECT_RUNTIME_DIR / "hana_memory.sqlite3"
 MEMORY_EVENTS = PROJECT_RUNTIME_DIR / "hana_events.jsonl"
 ATTACHMENTS_DIR = PROJECT_RUNTIME_DIR / "attachments"
+
+# --- Local models (offline, lightweight) -------------------------------- #
+MODELS_DIR = AGENT_ROOT / "models"                     # onnx models bundled/cached locally
+SILERO_VAD_MODEL = MODELS_DIR / "silero_vad.onnx"      # neural VAD (Silero v5, ~2MB)
 
 # --- Agent runtime store + MCP config (agent runtime) ------------------- #
 RUNTIME_DB = AGENT_RUNTIME_DIR / "hana_agent_oss.sqlite3"

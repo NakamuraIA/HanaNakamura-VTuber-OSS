@@ -27,7 +27,7 @@ export interface VoiceSpec {
 }
 
 // Fallback catalog used when the backend is offline.
-export const LLM_PROVIDERS = ["gemini_api", "openrouter", "groq"];
+export const LLM_PROVIDERS = ["gemini_api", "openrouter", "groq", "deepseek"];
 export const TTS_PROVIDERS = ["google_cloud_tts", "gemini_tts", "edge", "azure", "cartesia", "minimax", "elevenlabs"];
 export const STT_PROVIDERS = ["groq_whisper", "gemini_audio", "local", "openai"];
 export const TERMINAL_TTS_PROVIDERS = ["edge", "gemini_tts", "google_cloud_tts", "cartesia", "azure", "minimax", "elevenlabs"];
@@ -179,6 +179,19 @@ export const MODEL_CATALOG: ModelSpec[] = [
     pricing: { prompt: "0.29", completion: "0.59" },
   },
   {
+    id: "qwen/qwen3.6-27b",
+    label: "Qwen3.6 27B (visão)",
+    provider: "groq",
+    supportsVision: true,
+    supportsTools: true,
+    supportsNativeSearch: false,
+    inputModalities: ["text", "image"],
+    outputModalities: ["text"],
+    supportedParameters: ["tools", "tool_choice"],
+    maxInputTokens: 131_072,
+    maxOutputTokens: 32_768,
+  },
+  {
     id: "meta-llama/llama-4-scout-17b-16e-instruct",
     label: "Llama 4 Scout 17B 16E",
     provider: "groq",
@@ -216,6 +229,34 @@ export const MODEL_CATALOG: ModelSpec[] = [
     maxInputTokens: 131_072,
     maxOutputTokens: 8_192,
   },
+  {
+    id: "deepseek-v4-flash",
+    label: "DeepSeek V4 Flash",
+    provider: "deepseek",
+    supportsVision: false,
+    supportsTools: true,
+    supportsNativeSearch: false,
+    inputModalities: ["text"],
+    outputModalities: ["text"],
+    supportedParameters: ["tools", "tool_choice", "response_format"],
+    maxInputTokens: 1_000_000,
+    maxOutputTokens: 384_000,
+    pricing: { prompt: "0.00000014", completion: "0.00000028" },
+  },
+  {
+    id: "deepseek-v4-pro",
+    label: "DeepSeek V4 Pro",
+    provider: "deepseek",
+    supportsVision: false,
+    supportsTools: true,
+    supportsNativeSearch: false,
+    inputModalities: ["text"],
+    outputModalities: ["text"],
+    supportedParameters: ["tools", "tool_choice", "response_format"],
+    maxInputTokens: 1_000_000,
+    maxOutputTokens: 384_000,
+    pricing: { prompt: "0.000000435", completion: "0.00000087" },
+  },
 ];
 
 export const VOICE_CATALOG: VoiceSpec[] = [
@@ -246,6 +287,11 @@ export const VOICE_CATALOG: VoiceSpec[] = [
   { id: "pt-BR-AntonioNeural", label: "Edge Antonio", provider: "edge" },
   { id: "pt-BR-FranciscaNeural", label: "Edge Francisca", provider: "edge" },
   { id: "pt-BR-ThalitaNeural", label: "Edge Thalita", provider: "edge" },
+  // Edge japonesas (lê PT com sotaque japonês 😄)
+  { id: "ja-JP-NanamiNeural", label: "Edge Nanami (ja-JP - sotaque japonês)", provider: "edge" },
+  { id: "ja-JP-AoiNeural", label: "Edge Aoi (ja-JP - sotaque japonês)", provider: "edge" },
+  { id: "ja-JP-MayuNeural", label: "Edge Mayu (ja-JP - sotaque japonês)", provider: "edge" },
+  { id: "ja-JP-ShioriNeural", label: "Edge Shiori (ja-JP - sotaque japonês)", provider: "edge" },
 
   // Gemini API TTS
   { id: "Zephyr", label: "Gemini Zephyr", provider: "gemini_tts" },

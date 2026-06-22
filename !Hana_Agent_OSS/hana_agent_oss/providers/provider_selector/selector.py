@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from hana_agent_oss.providers.contracts import ProviderRequest, ProviderResponse
+from hana_agent_oss.providers.provider_selector.deepseek.provider import DeepSeekProvider
 from hana_agent_oss.providers.provider_selector.gemini_api.provider import GeminiApiProvider
 from hana_agent_oss.providers.provider_selector.groq.provider import GroqProvider
 from hana_agent_oss.providers.provider_selector.openrouter.provider import OpenRouterProvider
@@ -75,6 +76,7 @@ class ProviderSelector:
             "gemini_api": GeminiApiProvider(),
             "openrouter": OpenRouterProvider(),
             "groq": GroqProvider(),
+            "deepseek": DeepSeekProvider(),
         }
         self._definitions = {
             "gemini_api": ProviderDefinition(
@@ -103,6 +105,34 @@ class ProviderSelector:
                     supports_audio=False,
                     supports_video=False,
                     supports_pdf=True,
+                    supports_native_web_search=False,
+                    supports_streaming=True,
+                    supports_structured_output=True,
+                    supports_function_calling=True,
+                    supports_code_execution=False,
+                    supports_image_generation=False,
+                    supports_video_generation=False,
+                    supports_tts=False,
+                    supports_live_voice=False,
+                    supports_memory_embeddings=False,
+                    supports_rag=False,
+                ),
+            ),
+            "deepseek": ProviderDefinition(
+                provider_id="deepseek",
+                display_name="DeepSeek (oficial)",
+                default_model="deepseek-v4-flash",
+                rules=(
+                    "Use DEEPSEEK_API_KEY.",
+                    "API OpenAI-compativel em api.deepseek.com (chat + streaming + tools).",
+                    "Sem busca nativa, XML de imagem ou tools server-side do Gemini.",
+                ),
+                capabilities=ProviderCapabilities(
+                    multimodal_input=False,
+                    supports_image=False,
+                    supports_audio=False,
+                    supports_video=False,
+                    supports_pdf=False,
                     supports_native_web_search=False,
                     supports_streaming=True,
                     supports_structured_output=True,
@@ -162,6 +192,8 @@ class ProviderSelector:
             "groq_cloud": "groq",
             "groqcloud": "groq",
             "glock": "groq",
+            "deepseek_official": "deepseek",
+            "deep_seek": "deepseek",
         }.get(raw, raw or "gemini_api")
 
     def generate(self, request: ProviderRequest) -> ProviderResponse:

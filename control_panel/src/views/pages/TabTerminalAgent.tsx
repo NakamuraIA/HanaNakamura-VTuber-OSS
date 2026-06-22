@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   Bot,
@@ -24,6 +24,7 @@ import { ApiController } from "../../controllers/api";
 import { ConnectionsConfig, TerminalAgentEvent, TerminalAgentEventKind, VoiceConfig, VoiceInputDevice, VoiceProviderSpec, VoiceRuntimeStatus } from "../../models/types";
 import { DEFAULT_VOICE_CONFIG } from "../../api/config";
 import { CatalogPicker, CatalogPickerOption } from "../components/shared/CatalogPicker";
+import { readRememberedVoices, rememberVoice } from "../../models/voiceMemory";
 
 const MAX_VISIBLE_EVENTS = 250;
 const AUDIO_DEVICE_KEY = "hana_terminal_agent_audio_device";
@@ -119,8 +120,8 @@ const EVENT_LABELS: Record<TerminalAgentEventKind, string> = {
   transcription: "Transcricao",
   response: "Hana",
   tool: "Tool",
-  user_speech: "Nakamura",
-  user_text: "Nakamura",
+  user_speech: "Operador",
+  user_text: "Operador",
   assistant_thought: "Hana",
   tool_call: "Tool call",
   tool_result: "Tool result",
@@ -132,7 +133,7 @@ const EVENT_LABELS: Record<TerminalAgentEventKind, string> = {
 
 type EventLane = "user" | "assistant" | "system";
 
-const HIGHLIGHT_PATTERN = /(Nakamura|Hana|tts|stt|backend|runtime|whisper|Google Cloud TTS|Groq Whisper|erro|falha|failed|success|online|offline|speaking|recording|transcribed)/i;
+const HIGHLIGHT_PATTERN = /(Operador|Hana|tts|stt|backend|runtime|whisper|Google Cloud TTS|Groq Whisper|erro|falha|failed|success|online|offline|speaking|recording|transcribed)/i;
 
 // Groups event kinds into visual lanes without changing the backend event contract.
 function eventLane(event: TerminalAgentEvent): EventLane {
@@ -149,18 +150,18 @@ function eventLane(event: TerminalAgentEvent): EventLane {
 function eventBubbleClass(event: TerminalAgentEvent) {
   const lane = eventLane(event);
   if (event.kind === "error") {
-    return "ml-auto border-red-400/40 bg-red-950/45 text-red-50 shadow-[0_0_24px_rgba(248,113,113,0.12)]";
+    return "ml-auto border-red-400/40 bg-red-950/45 text-red-50";
   }
   if (lane === "user") {
-    return "ml-auto border-cyan-400/35 bg-cyan-950/35 text-cyan-50 shadow-[0_0_26px_rgba(34,211,238,0.10)]";
+    return "ml-auto border-cyan-400/30 bg-cyan-950/30 text-cyan-50";
   }
   if (lane === "assistant") {
-    return "mr-auto border-fuchsia-400/35 bg-fuchsia-950/30 text-fuchsia-50 shadow-[0_0_26px_rgba(217,70,239,0.10)]";
+    return "mr-auto border-fuchsia-400/30 bg-fuchsia-950/25 text-fuchsia-50";
   }
   if (event.kind === "tool_call" || event.kind === "tool_result" || event.kind === "tool") {
-    return "mx-auto border-amber-400/30 bg-amber-950/20 text-amber-50 shadow-[0_0_20px_rgba(251,191,36,0.08)]";
+    return "mx-auto border-amber-400/25 bg-amber-950/15 text-amber-50";
   }
-  return "mx-auto border-zinc-700/70 bg-zinc-900/55 text-zinc-100";
+  return "mx-auto border-zinc-800 bg-zinc-900/40 text-zinc-200";
 }
 
 // Colors the compact role chip independently from the full message tone.
@@ -251,7 +252,7 @@ function metadataText(event: TerminalAgentEvent, key: string) {
   return "";
 }
 
-// Reads the background-job id from terminal metadata when a row belongs to Omni.
+// Reads the background-job id from terminal metadata when a row belongs to a background job.
 function eventJobId(event: TerminalAgentEvent) {
   return metadataText(event, "jobId") || metadataText(event, "job_id");
 }
@@ -354,6 +355,77 @@ function AnimatedTerminalText({ text, active, onComplete }: AnimatedTerminalText
   return <>{highlightedText(text.slice(0, visibleLength))}</>;
 }
 
+interface EventRowProps {
+  event: TerminalAgentEvent;
+  streaming: boolean;
+  onStreamComplete: (id: string) => void;
+  onCancelJob: (jobId: string) => void;
+}
+
+// One memoized event bubble. The 2s poll used to re-render ALL bubbles (each one
+// re-running the highlight regex); with memo only NEW/changed events paint.
+const EventRow = memo(function EventRow({ event, streaming, onStreamComplete, onCancelJob }: EventRowProps) {
+  const lane = eventLane(event);
+  const model = metadataText(event, "model");
+  const emotion = metadataText(event, "emotion");
+  const vision = metadataText(event, "vision");
+  const operation = eventOperation(event);
+  const jobId = eventJobId(event);
+  const canCancelJob = canCancelEventJob(event);
+  const isSystemLane = lane === "system";
+
+  return (
+    <div className={`group mb-2.5 flex ${lane === "user" ? "justify-end" : lane === "assistant" ? "justify-start" : "justify-center"}`}>
+      <div className={`relative max-w-[min(760px,86%)] rounded-xl border px-4 py-2.5 ${isSystemLane ? "w-fit min-w-[300px]" : "min-w-[260px]"} ${eventBubbleClass(event)}`}>
+        <div className="mb-1.5 flex flex-wrap items-center gap-2">
+          <span className={`inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[10px] font-black uppercase tracking-[0.18em] ${eventChipClass(event)}`}>
+            {lane === "user" ? <Mic size={11} /> : lane === "assistant" ? <Bot size={11} /> : event.kind === "error" ? <AlertTriangle size={11} /> : <SquareTerminal size={11} />}
+            {EVENT_LABELS[event.kind] || event.kind}
+          </span>
+          <span className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">{formatTime(event.createdAt)}</span>
+          <span className="rounded bg-black/25 px-2 py-0.5 text-[10px] font-bold uppercase tracking-widest text-zinc-400">op={operation}</span>
+          {event.kind === "tool_result" && <span className="inline-flex items-center gap-1 rounded bg-emerald-400/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-widest text-emerald-200"><CheckCircle2 size={11} /> result</span>}
+          {event.kind === "error" && <span className="inline-flex items-center gap-1 rounded bg-red-400/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-widest text-red-200"><AlertTriangle size={11} /> alert</span>}
+          <div className="ml-auto flex items-center gap-2">
+            {canCancelJob && jobId && (
+              <button className="opacity-0 transition-opacity group-hover:opacity-100 text-red-300 hover:text-red-100" onClick={() => onCancelJob(jobId)} title="Cancelar job">
+                <Square size={14} />
+              </button>
+            )}
+            <button className="opacity-0 transition-opacity group-hover:opacity-100 text-zinc-500 hover:text-white" onClick={() => void copyText(serializeEvent(event))} title="Copiar linha">
+              <Copy size={14} />
+            </button>
+          </div>
+        </div>
+
+        {(model || emotion || vision || event.toolName) && (
+          <div className="mb-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] uppercase tracking-widest text-zinc-500">
+            {model && <span>model=<span className="text-indigo-200">{model}</span></span>}
+            {emotion && <span className="inline-flex items-center gap-1"><BrainCircuit size={11} /> emotion=<span className="text-fuchsia-200">{emotion}</span></span>}
+            {vision && <span className="inline-flex items-center gap-1"><Eye size={11} /> vision=<span className="text-cyan-200">{vision}</span></span>}
+            {event.toolName && <span className="inline-flex items-center gap-1"><Wrench size={11} /> tool=<span className="text-amber-100">{event.toolName}</span></span>}
+          </div>
+        )}
+
+        <pre className={`whitespace-pre-wrap break-words font-semibold leading-relaxed ${lane === "user" ? "text-right text-[13px] text-cyan-50" : lane === "assistant" ? "text-left text-[14px] text-fuchsia-50 md:text-[15px]" : "text-left text-[12px] text-zinc-200"}`}>
+          {event.kind === "assistant_text" ? (
+            <AnimatedTerminalText
+              text={event.displayText}
+              active={streaming}
+              onComplete={() => onStreamComplete(event.id)}
+            />
+          ) : highlightedText(event.displayText)}
+        </pre>
+        {event.speechText && event.speechText !== event.displayText && (
+          <pre className={`mt-2 whitespace-pre-wrap break-words border-t pt-2 font-semibold leading-relaxed ${lane === "user" ? "border-cyan-300/20 text-[11px] text-cyan-200" : lane === "assistant" ? "border-pink-300/20 text-[13px] text-pink-200" : "border-pink-300/20 text-[11px] text-pink-200"}`}>
+            <span className="font-black text-pink-100">tts&gt;</span> {highlightedText(event.speechText)}
+          </pre>
+        )}
+      </div>
+    </div>
+  );
+});
+
 interface TabTerminalAgentProps {
   isActive: boolean;
 }
@@ -379,6 +451,7 @@ export function TabTerminalAgent({ isActive }: TabTerminalAgentProps) {
   const [recordingStartedAt, setRecordingStartedAt] = useState<number | null>(null);
   const [recordingElapsedSeconds, setRecordingElapsedSeconds] = useState(0);
   const [audioDevices, setAudioDevices] = useState<VoiceInputDevice[]>([]);
+  const [outputDevices, setOutputDevices] = useState<VoiceInputDevice[]>([]);
   const [selectedAudioDeviceId, setSelectedAudioDeviceId] = useState(() => localStorage.getItem(AUDIO_DEVICE_KEY) || "");
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -386,6 +459,7 @@ export function TabTerminalAgent({ isActive }: TabTerminalAgentProps) {
   const manualScrollRef = useRef(false);
   const loadedEventsRef = useRef(false);
   const eventIdsRef = useRef(new Set<string>());
+  const eventsSignatureRef = useRef("");
   const chunksRef = useRef<Blob[]>([]);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -395,7 +469,26 @@ export function TabTerminalAgent({ isActive }: TabTerminalAgentProps) {
   const vadStatsRef = useRef({ activeMs: 0, maxRms: 0, lastAt: 0 });
   const runtimeStatusLoadingRef = useRef(false);
 
-  const visibleEvents = useMemo(() => events.slice(-MAX_VISIBLE_EVENTS), [events]);
+  const visibleEvents = useMemo(() => {
+    // Colapsa repetições consecutivas de eventos de sistema idênticos (ex: o
+    // "Runtime de voz em espera..." que aparecia 15x seguidas) mantendo o último.
+    const collapsed: TerminalAgentEvent[] = [];
+    for (const event of events) {
+      const prev = collapsed[collapsed.length - 1];
+      if (
+        prev &&
+        eventLane(event) === "system" &&
+        prev.kind === event.kind &&
+        prev.displayText === event.displayText &&
+        prev.status === event.status
+      ) {
+        collapsed[collapsed.length - 1] = event;
+        continue;
+      }
+      collapsed.push(event);
+    }
+    return collapsed.slice(-MAX_VISIBLE_EVENTS);
+  }, [events]);
   const sttOptions = providerOptions(sttProviders, FALLBACK_STT_OPTIONS);
   const ttsOptions = providerOptions(ttsProviders, FALLBACK_TTS_OPTIONS);
   const activeSttProvider = sttOptions.find((item) => item.id === voiceConfig.sttProvider);
@@ -404,6 +497,10 @@ export function TabTerminalAgent({ isActive }: TabTerminalAgentProps) {
   const ttsUsesPitch = !["gemini_tts", "cartesia", "elevenlabs"].includes(voiceConfig.ttsProvider);
   const ttsCanStream = voiceConfig.ttsProvider === "google_cloud_tts";
   const ttsIsElevenLabs = voiceConfig.ttsProvider === "elevenlabs";
+  const [rememberedVoices, setRememberedVoices] = useState<string[]>([]);
+  useEffect(() => {
+    setRememberedVoices(readRememberedVoices(voiceConfig.ttsProvider || ""));
+  }, [voiceConfig.ttsProvider]);
   const sttModelOptions = useMemo<CatalogPickerOption[]>(() => {
     const models = activeSttProvider?.models || [];
     const options: CatalogPickerOption[] = models.map((model) => ({
@@ -469,6 +566,18 @@ export function TabTerminalAgent({ isActive }: TabTerminalAgentProps) {
       favoriteId: `${voiceConfig.ttsProvider}:${voice.id}`,
       secondary: [voice.id, voice.locale].filter(Boolean).join(" - "),
     }));
+    // Vozes que o usuario ja colou antes (persistidas), pra nao re-copiar do ElevenLabs.
+    rememberedVoices.forEach((id) => {
+      if (id && !merged.has(id)) {
+        merged.set(id, {
+          value: id,
+          label: id,
+          favoriteId: `${voiceConfig.ttsProvider}:${id}`,
+          secondary: id,
+          badges: [{ label: "salva", tone: "purple" }],
+        });
+      }
+    });
     if (voiceConfig.ttsVoice && !merged.has(voiceConfig.ttsVoice)) {
       merged.set(voiceConfig.ttsVoice, {
         value: voiceConfig.ttsVoice,
@@ -478,12 +587,17 @@ export function TabTerminalAgent({ isActive }: TabTerminalAgentProps) {
       });
     }
     return Array.from(merged.values());
-  }, [activeTtsProvider, voiceConfig.ttsProvider, voiceConfig.ttsVoice]);
+  }, [activeTtsProvider, voiceConfig.ttsProvider, voiceConfig.ttsVoice, rememberedVoices]);
 
   const loadEvents = async () => {
     const data = await ApiController.getTerminalAgentEvents(MAX_VISIBLE_EVENTS);
     setBackendState(data.backendAvailable === false ? "offline" : "online");
     const nextEvents = data.events || [];
+    // Nada mudou desde o último poll → não recria o array (evita re-render de
+    // todas as bolhas a cada 2s, que era o que deixava a aba pesada).
+    const signature = `${nextEvents.length}:${nextEvents[nextEvents.length - 1]?.id || ""}`;
+    if (loadedEventsRef.current && signature === eventsSignatureRef.current) return;
+    eventsSignatureRef.current = signature;
     if (loadedEventsRef.current) {
       const newestAssistant = [...nextEvents]
         .reverse()
@@ -514,6 +628,23 @@ export function TabTerminalAgent({ isActive }: TabTerminalAgentProps) {
     setAudioDevices(await ApiController.getVoiceInputDevices());
   };
 
+  const refreshOutputDevices = async () => {
+    setOutputDevices(await ApiController.getVoiceOutputDevices());
+  };
+
+  const updateSecondOutput = (patch: Partial<VoiceConfig>) => {
+    void updateVoiceConfig(patch, false);
+    void ApiController.configureVoiceRuntime()
+      .then((runtime) => {
+        setRuntimeStatus(runtime);
+        setBackendState("online");
+      })
+      .catch((error) => {
+        setBackendState("offline");
+        setStatus(`Falha ao atualizar segunda saida: ${toErrorMessage(error)}`);
+      });
+  };
+
   useEffect(() => {
     Promise.all([ApiController.getVoiceConfig(), ApiController.getVoiceCatalog(), ApiController.getConnectionsConfig()])
       .then(([config, catalog, connectionsConfig]) => {
@@ -525,6 +656,7 @@ export function TabTerminalAgent({ isActive }: TabTerminalAgentProps) {
       .catch(() => setStatus("Backend indisponivel. Usando cache local."));
     void loadEvents();
     void refreshAudioDevices();
+    void refreshOutputDevices();
     void loadRuntimeStatus();
 
     const timer = window.setInterval(loadEvents, 2000);
@@ -718,6 +850,14 @@ export function TabTerminalAgent({ isActive }: TabTerminalAgentProps) {
     setStatus(`Cancelamento solicitado para ${jobId}.`);
   };
 
+  // Callbacks estáveis para o EventRow memoizado (senão o memo não adianta nada).
+  const cancelEventJobRef = useRef(cancelEventJob);
+  cancelEventJobRef.current = cancelEventJob;
+  const handleCancelJob = useCallback((jobId: string) => { void cancelEventJobRef.current(jobId); }, []);
+  const handleStreamComplete = useCallback((id: string) => {
+    setStreamingEventId((current) => (current === id ? null : current));
+  }, []);
+
   const releaseMicrophone = () => {
     stopVadMonitor();
     streamRef.current?.getTracks().forEach((track) => track.stop());
@@ -906,7 +1046,7 @@ export function TabTerminalAgent({ isActive }: TabTerminalAgentProps) {
       await appendTerminalEvent({
         kind: "user_speech",
         source: "microphone",
-        displayText: "Microfone aberto. Hana esta ouvindo Nakamura.",
+        displayText: "Microfone aberto. Hana esta ouvindo Operador.",
         speechText: "",
         status: "ouvindo",
         metadata: { deviceId: selectedAudioDeviceId || "default", sttProvider: voiceConfig.sttProvider, model: voiceConfig.sttModel, mode: options.source || "manual" },
@@ -948,7 +1088,7 @@ export function TabTerminalAgent({ isActive }: TabTerminalAgentProps) {
   };
 
   const testTts = async () => {
-    const text = sanitizedPreview || draft.trim() || "Oi Nakamura, teste de voz da Hana.";
+    const text = sanitizedPreview || draft.trim() || "Oi Operador, teste de voz da Hana.";
     setStatus("Enviando teste TTS...");
     let ok = false;
     let errorMessage = "";
@@ -1073,65 +1213,15 @@ export function TabTerminalAgent({ isActive }: TabTerminalAgentProps) {
           <div className="flex h-full min-h-[320px] items-center justify-center text-zinc-500">
             <span className="border border-dashed border-zinc-700 px-4 py-2">terminal pronto: aguardando voz, tool calls e respostas</span>
           </div>
-        ) : visibleEvents.map((event) => {
-          const lane = eventLane(event);
-          const model = metadataText(event, "model");
-          const emotion = metadataText(event, "emotion");
-          const vision = metadataText(event, "vision");
-          const operation = eventOperation(event);
-          const jobId = eventJobId(event);
-          const canCancelJob = canCancelEventJob(event);
-          const isSystemLane = lane === "system";
-
-          return (
-            <div key={event.id} className={`group mb-3 flex ${lane === "user" ? "justify-end" : lane === "assistant" ? "justify-start" : "justify-center"}`}>
-              <div className={`relative max-w-[min(760px,86%)] rounded-xl border px-4 py-3 transition-all duration-200 hover:-translate-y-px ${isSystemLane ? "w-fit min-w-[320px]" : "min-w-[280px]"} ${eventBubbleClass(event)}`}>
-                <div className="mb-2 flex flex-wrap items-center gap-2">
-                  <span className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[10px] font-black uppercase tracking-[0.18em] ${eventChipClass(event)}`}>
-                    {lane === "user" ? <Mic size={11} /> : lane === "assistant" ? <Bot size={11} /> : event.kind === "error" ? <AlertTriangle size={11} /> : <SquareTerminal size={11} />}
-                    {EVENT_LABELS[event.kind] || event.kind}
-                  </span>
-                  <span className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">{formatTime(event.createdAt)}</span>
-                  <span className="rounded bg-black/25 px-2 py-0.5 text-[10px] font-bold uppercase tracking-widest text-zinc-300">op={operation}</span>
-                  {event.kind === "tool_result" && <span className="inline-flex items-center gap-1 rounded bg-emerald-400/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-widest text-emerald-200"><CheckCircle2 size={11} /> result</span>}
-                  {event.kind === "error" && <span className="inline-flex items-center gap-1 rounded bg-red-400/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-widest text-red-200"><AlertTriangle size={11} /> alert</span>}
-                  <div className="ml-auto flex items-center gap-2">
-                    {canCancelJob && jobId && (
-                      <button className="opacity-0 transition-opacity group-hover:opacity-100 text-red-300 hover:text-red-100" onClick={() => cancelEventJob(jobId)} title="Cancelar job">
-                        <Square size={14} />
-                      </button>
-                    )}
-                    <button className="opacity-0 transition-opacity group-hover:opacity-100 text-zinc-500 hover:text-white" onClick={() => copyText(serializeEvent(event))} title="Copiar linha">
-                      <Copy size={14} />
-                    </button>
-                  </div>
-                </div>
-
-                <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] uppercase tracking-widest text-zinc-500">
-                  {model && <span>model=<span className="text-indigo-200">{model}</span></span>}
-                  {emotion && <span className="inline-flex items-center gap-1"><BrainCircuit size={11} /> emotion=<span className="text-fuchsia-200">{emotion}</span></span>}
-                  {vision && <span className="inline-flex items-center gap-1"><Eye size={11} /> vision=<span className="text-cyan-200">{vision}</span></span>}
-                  {event.toolName && <span className="inline-flex items-center gap-1"><Wrench size={11} /> tool=<span className="text-amber-100">{event.toolName}</span></span>}
-                </div>
-
-                <pre className={`whitespace-pre-wrap break-words font-semibold leading-relaxed ${lane === "user" ? "text-right text-[13px] text-cyan-50" : lane === "assistant" ? "text-left text-[15px] text-fuchsia-50 md:text-[16px]" : "text-left text-[13px] text-zinc-100"}`}>
-                  {event.kind === "assistant_text" ? (
-                    <AnimatedTerminalText
-                      text={event.displayText}
-                      active={streamingEventId === event.id}
-                      onComplete={() => setStreamingEventId((current) => current === event.id ? null : current)}
-                    />
-                  ) : highlightedText(event.displayText)}
-                </pre>
-                {event.speechText && event.speechText !== event.displayText && (
-                  <pre className={`mt-3 whitespace-pre-wrap break-words border-t pt-2 font-semibold leading-relaxed ${lane === "user" ? "border-cyan-300/20 text-[11px] text-cyan-200" : lane === "assistant" ? "border-pink-300/20 text-[13px] text-pink-200 md:text-[14px]" : "border-pink-300/20 text-[11px] text-pink-200"}`}>
-                    <span className="font-black text-pink-100">tts&gt;</span> {highlightedText(event.speechText)}
-                  </pre>
-                )}
-              </div>
-            </div>
-          );
-        })}
+        ) : visibleEvents.map((event) => (
+          <EventRow
+            key={event.id}
+            event={event}
+            streaming={streamingEventId === event.id}
+            onStreamComplete={handleStreamComplete}
+            onCancelJob={handleCancelJob}
+          />
+        ))}
         </div>
       </div>
       {showScrollToBottom && (
@@ -1227,9 +1317,69 @@ export function TabTerminalAgent({ isActive }: TabTerminalAgentProps) {
               </label>
 
               <label className="block">
-                <span className="mb-1 block uppercase tracking-widest text-zinc-500">Threshold VAD</span>
+                <span className="mb-1 flex items-center justify-between uppercase tracking-widest text-zinc-500">
+                  Segunda saida de audio
+                  <input
+                    type="checkbox"
+                    checked={!!voiceConfig.secondOutputEnabled}
+                    onChange={(event) => updateSecondOutput({ secondOutputEnabled: event.target.checked })}
+                    onFocus={refreshOutputDevices}
+                    className="h-4 w-4 accent-cyan-500"
+                  />
+                </span>
+                <select
+                  value={voiceConfig.secondOutputDeviceId || ""}
+                  disabled={!voiceConfig.secondOutputEnabled}
+                  onChange={(event) => {
+                    const device = outputDevices.find((item) => item.id === event.target.value);
+                    updateSecondOutput({ secondOutputDeviceId: event.target.value, secondOutputDeviceLabel: device?.label || "" });
+                  }}
+                  onFocus={refreshOutputDevices}
+                  className="w-full rounded-md border border-zinc-700 bg-[#050608] px-3 py-2 text-zinc-100 outline-none disabled:opacity-40"
+                >
+                  <option value="">Selecione a saida (ex.: CABLE Input)</option>
+                  {outputDevices.map((device, index) => (
+                    <option key={device.id || index} value={device.id}>{device.label || `Saida ${index + 1}`}</option>
+                  ))}
+                </select>
+                <span className="text-zinc-600">A voz toca no PC e tambem nesse dispositivo (cabo virtual p/ Discord, VTube etc.). Ligue so quando quiser.</span>
+              </label>
+
+              <label className="block">
+                <span className="mb-1 block uppercase tracking-widest text-zinc-500">Modo VAD</span>
+                <select value={voiceConfig.vadMode || "silero"} onChange={(event) => updateVoiceConfig({ vadMode: event.target.value as "silero" | "rms" })} className="w-full rounded-md border border-zinc-700 bg-[#050608] px-3 py-2 text-zinc-100 outline-none">
+                  <option value="silero">Silero neural (ignora ruido)</option>
+                  <option value="rms">Energia RMS (simples)</option>
+                </select>
+                <span className="text-zinc-600">{(voiceConfig.vadMode || "silero") === "silero" ? "Rede neural distingue voz de ruido. Cai pro RMS se o modelo faltar." : "So volume: dispara com qualquer barulho alto."}</span>
+              </label>
+
+              {(voiceConfig.vadMode || "silero") === "silero" && (
+                <label className="block">
+                  <span className="mb-1 block uppercase tracking-widest text-zinc-500">Sensibilidade Silero</span>
+                  <input type="range" min="0.2" max="0.9" step="0.05" value={voiceConfig.vadProbThreshold ?? 0.5} onChange={(event) => updateVoiceConfig({ vadProbThreshold: Number(event.target.value) })} className="w-full accent-emerald-300" />
+                  <span className="text-zinc-500">{Number(voiceConfig.vadProbThreshold ?? 0.5).toFixed(2)} — maior = exige mais certeza (menos falso gatilho)</span>
+                </label>
+              )}
+
+              <label className="block">
+                <span className="mb-1 block uppercase tracking-widest text-zinc-500">Threshold VAD (piso de volume)</span>
                 <input type="range" min="0.005" max="0.12" step="0.001" value={voiceConfig.vadThreshold || 0.035} onChange={(event) => updateVoiceConfig({ vadThreshold: Number(event.target.value) })} className="w-full accent-emerald-300" />
                 <span className="text-zinc-500">{Number(voiceConfig.vadThreshold || 0.035).toFixed(3)}</span>
+              </label>
+
+              <label className="block">
+                <span className="mb-1 block uppercase tracking-widest text-zinc-500">Limite de fala (TTS)</span>
+                <input type="range" min="0" max="1200" step="50" value={voiceConfig.ttsMaxChars ?? 350} onChange={(event) => updateVoiceConfig({ ttsMaxChars: Number(event.target.value) })} className="w-full accent-pink-300" />
+                <span className="text-zinc-500">{(voiceConfig.ttsMaxChars ?? 350) === 0 ? "sem limite" : `${voiceConfig.ttsMaxChars ?? 350} chars (corta fala longa pra economizar credito de TTS)`}</span>
+              </label>
+
+              <label className="flex items-center justify-between gap-3">
+                <span className="block">
+                  <span className="mb-1 block uppercase tracking-widest text-zinc-500">Barge-in (falar por cima)</span>
+                  <span className="text-zinc-600">Interromper a fala da Hana falando por cima. Use de FONE (nas caixas pode cortar sozinha com o eco).</span>
+                </span>
+                <input type="checkbox" checked={!!voiceConfig.bargeInEnabled} onChange={(event) => updateVoiceConfig({ bargeInEnabled: event.target.checked })} className="h-5 w-5 accent-emerald-300" />
               </label>
 
               <label className="block">
@@ -1287,6 +1437,10 @@ export function TabTerminalAgent({ isActive }: TabTerminalAgentProps) {
                   <input
                     value={voiceConfig.ttsVoice}
                     onChange={(event) => updateVoiceConfig({ ttsVoice: event.target.value.trim() })}
+                    onBlur={(event) => {
+                      const id = event.target.value.trim();
+                      if (id) setRememberedVoices(rememberVoice(voiceConfig.ttsProvider, id));
+                    }}
                     className="mt-2 w-full rounded-md border border-pink-400/20 bg-[#050608] px-3 py-2 font-mono text-zinc-100 outline-none focus:border-pink-400/60"
                     placeholder="Cole qualquer Voice ID da sua biblioteca"
                   />
@@ -1345,6 +1499,14 @@ export function TabTerminalAgent({ isActive }: TabTerminalAgentProps) {
                   </label>
                 </div>
               )}
+
+              <label className="flex items-center justify-between gap-3 rounded-md border border-fuchsia-500/30 bg-fuchsia-950/15 px-3 py-2 md:col-span-2">
+                <span>
+                  <span className="block uppercase tracking-widest text-fuchsia-300">Modo Call (ouvir o grupo)</span>
+                  <span className="text-zinc-500">Para quando a Hana ouve a call (cabo virtual) com várias pessoas. Ela para de tratar todo mundo como Operador e age como participante do grupo.</span>
+                </span>
+                <input type="checkbox" checked={Boolean(voiceConfig.callMode)} onChange={(event) => updateVoiceConfig({ callMode: event.target.checked })} className="h-4 w-4 accent-fuchsia-300" />
+              </label>
 
               {ttsCanStream && (
                 <label className="flex items-center justify-between gap-3 rounded-md border border-zinc-800 bg-[#050608] px-3 py-2 md:col-span-2">

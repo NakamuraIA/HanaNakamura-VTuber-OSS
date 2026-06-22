@@ -19,6 +19,7 @@ import { TabLogs } from "../pages/TabLogs";
 import { TabMCP } from "../pages/TabMCP";
 import { TabTerminalAgent } from "../pages/TabTerminalAgent";
 import { CyberBackground } from "../components/CyberBackground";
+import { ReminderToasts } from "../components/shared/ReminderToasts";
 
 const menus: MenuOption[] = [
   { icon: <MonitorDot size={20} />, label: "Monitor Geral", id: "geral" },
@@ -51,6 +52,7 @@ export function MainLayout() {
   return (
     <div className="flex h-screen w-full text-[var(--text-primary)] bg-transparent">
       <CyberBackground />
+      <ReminderToasts />
       <Sidebar menus={menus} activeTab={activeTab} onTabChange={setActiveTab} />
       
       {/* Main Content com Efeito de Vidro */}

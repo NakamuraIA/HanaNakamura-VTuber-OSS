@@ -110,6 +110,12 @@ data/memory/
 data/characters/**
 !data/characters/
 !data/characters/.gitkeep
+# Sample characters shipped with the OSS build (generic placeholders)
+!data/characters/hana/
+!data/characters/hana/character.json
+!data/characters/nova/
+!data/characters/nova/character.json
+
 
 # Log files
 *.log
@@ -130,8 +136,6 @@ logs/
 
 # Project Specific
 !data/.gitkeep
-data/vts_token.txt
-data/vts_state.json
 data/emotion_state.json
 temp/
 src/config/persona.txt

@@ -20,12 +20,8 @@ export interface ConnectionsConfig {
   pttKey: string;
   stopHotkey: boolean;
   stopKey: string;
-  vts: boolean;
   discord: boolean;
-  discordSpeak: boolean;
-  discordListen: boolean;
-  omni: boolean;
-  omniUrl: string;
+  localHands: boolean;
   visao: boolean;
 }
 
@@ -42,27 +38,21 @@ export interface SystemStatus {
     tts: boolean;
     stt: boolean;
     visao: boolean;
-    vtube_studio: boolean;
     discord: boolean;
-    omni: boolean;
+    localHands: boolean;
   };
-}
-
-export interface OmniStatus {
-  enabled: boolean;
-  ok: boolean;
-  online: boolean;
-  baseUrl: string;
-  latencyMs?: number;
-  error?: string;
-  status?: Record<string, unknown>;
 }
 
 export interface LlmConfig {
   llmProvider: string;
   llmModel: string;
+  agentProvider: string;
+  agentModel: string;
+  agentToolRounds: number;
   llmFilter: string;
   llmTemperature: number;
+  /** Groq "pensar antes de falar": true = raciocina; false = resposta direta/rápida. */
+  groqThinking?: boolean;
   openrouterRoutingByModel: Record<string, OpenRouterRoutingConfig>;
   visionModel: string;
   ttsProvider: string;
@@ -79,6 +69,8 @@ export interface LlmConfig {
   ttsSimilarity: number;
   ttsStyle: number;
   ttsSpeakerBoost: boolean;
+  /** Última voz/controles usados por provider de TTS (restaurados ao voltar). */
+  ttsByProvider?: Record<string, Partial<LlmConfig>>;
 }
 
 export interface ChatConfig {
@@ -158,7 +150,7 @@ export interface AgentJobProgressItem {
 
 export interface AgentJob {
   job_id: string;
-  agent: "omni" | string;
+  agent: string;
   tool: string;
   mode: string;
   task: string;
@@ -241,7 +233,13 @@ export interface VoiceConfig {
   inputDeviceId?: string;
   inputDeviceLabel?: string;
   inputDeviceSource?: string;
+  secondOutputEnabled?: boolean;
+  secondOutputDeviceId?: string;
+  secondOutputDeviceLabel?: string;
   vadThreshold?: number;
+  vadMode?: "silero" | "rms";
+  vadProbThreshold?: number;
+  bargeInEnabled?: boolean;
   silenceTimeoutMs?: number;
   ttsEnabled: boolean;
   ttsProvider: string;
@@ -257,7 +255,10 @@ export interface VoiceConfig {
   ttsSimilarity: number;
   ttsStyle: number;
   ttsSpeakerBoost: boolean;
+  ttsMaxChars?: number;
   speakTerminalEvents: boolean;
+  /** Modo call: ouvindo várias pessoas; a Hana não assume que quem fala é a Operador. */
+  callMode?: boolean;
 }
 
 

@@ -267,7 +267,16 @@ class EdgeTTSPlayer:
         self._lock = threading.RLock()
         self._pygame: Any | None = None
         self._stream_stop_event = threading.Event()
+        # Segunda saída (espelho): índice sounddevice de um device extra (ex.: CABLE
+        # Input do VB-Audio) onde a voz também toca, além do alto-falante local. None =
+        # desligado. Uma falha no espelho NUNCA derruba a saída principal.
+        self._mirror_device: int | None = None
         audio_control.register_stop_callback("edge_tts_player", self.stop)
+
+    def set_mirror(self, device_index: int | None, enabled: bool) -> None:
+        """Set/clear the second output device the voice is mirrored to."""
+        with self._lock:
+            self._mirror_device = device_index if (enabled and device_index is not None) else None
 
     def _pygame_module(self):
         if self._pygame is not None:
@@ -290,6 +299,67 @@ class EdgeTTSPlayer:
         except (TypeError, ValueError):
             return 1.0
 
+    def _start_mirror_for_bytes(self, audio: bytes, volume: float) -> threading.Thread | None:
+        """Decode a full TTS payload and play it on the second output device, in parallel.
+
+        Best-effort mirror for the pygame (file) playback path: ffmpeg decodes the bytes
+        to PCM and writes them to the chosen sounddevice output (e.g. CABLE Input) while
+        pygame plays locally. Any failure is swallowed — it never affects the main voice.
+        """
+        mirror_device = self._mirror_device
+        if mirror_device is None or not audio:
+            return None
+        ffmpeg = _ffmpeg_path()
+        if not _command_exists(ffmpeg):
+            return None
+
+        def _run() -> None:
+            command = [
+                ffmpeg, "-hide_banner", "-loglevel", "error",
+                "-i", "pipe:0",
+                "-filter:a", f"volume={self._normalize_volume(volume):.3f}",
+                "-f", "s16le", "-acodec", "pcm_s16le",
+                "-ac", str(STREAM_CHANNELS), "-ar", str(STREAM_SAMPLE_RATE), "pipe:1",
+            ]
+            process: Any = None
+            try:
+                import sounddevice as sd
+
+                process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                if not process.stdin or not process.stdout:
+                    return
+
+                # Feed stdin from a separate thread so a full pipe buffer never deadlocks
+                # against us reading stdout.
+                def _feed() -> None:
+                    with contextlib.suppress(Exception):
+                        process.stdin.write(audio)
+                    with contextlib.suppress(Exception):
+                        process.stdin.close()
+
+                feeder = threading.Thread(target=_feed, daemon=True)
+                feeder.start()
+                with sd.RawOutputStream(
+                    samplerate=STREAM_SAMPLE_RATE, channels=STREAM_CHANNELS, dtype="int16", device=mirror_device
+                ) as stream:
+                    while True:
+                        if self._stream_stop_event.is_set() or audio_control.stop_requested():
+                            break
+                        data = process.stdout.read(4096)
+                        if not data:
+                            break
+                        stream.write(data)
+            except Exception as exc:
+                logger.warning("[VOICE TTS] Segunda saida (device %s) falhou no playback: %s", mirror_device, exc)
+            finally:
+                if process is not None and process.poll() is None:
+                    with contextlib.suppress(Exception):
+                        process.kill()
+
+        thread = threading.Thread(target=_run, daemon=True)
+        thread.start()
+        return thread
+
     def play_blocking(self, audio: bytes, *, mime_type: str = EDGE_AUDIO_MIME, volume: float = 1.0) -> None:
         """Play a complete TTS payload locally at the requested volume."""
         if not audio:
@@ -297,6 +367,7 @@ class EdgeTTSPlayer:
 
         pygame = self._pygame_module()
         playback_volume = self._normalize_volume(volume)
+        mirror_thread = self._start_mirror_for_bytes(audio, volume)
         suffix = ".wav" if mime_type in {"audio/wav", "audio/wave", "audio/x-wav"} or audio.startswith(b"RIFF") else ".mp3"
         fd, raw_path = tempfile.mkstemp(prefix="hana-edge-play-", suffix=suffix)
         os.close(fd)
@@ -316,6 +387,9 @@ class EdgeTTSPlayer:
                 time.sleep(0.05)
         finally:
             set_speaking(False)
+            if mirror_thread is not None and mirror_thread.is_alive():
+                # Let the mirror drain (it's ~the same length); bounded so we never hang.
+                mirror_thread.join(timeout=2.0)
             try:
                 pygame.mixer.music.unload()
             except Exception:
@@ -387,7 +461,19 @@ class EdgeTTSPlayer:
         def _stop_requested() -> bool:
             return self._stream_stop_event.is_set() or audio_control.stop_requested()
 
+        mirror_device = self._mirror_device
+
         def _decode_and_play() -> None:
+            mirror_stream = None
+            if mirror_device is not None:
+                try:
+                    mirror_stream = sd.RawOutputStream(
+                        samplerate=STREAM_SAMPLE_RATE, channels=STREAM_CHANNELS, dtype="int16", device=mirror_device
+                    )
+                    mirror_stream.start()
+                except Exception as exc:  # mirror is best-effort, never blocks the voice
+                    logger.warning("[VOICE TTS] Segunda saida (device %s) falhou ao abrir: %s", mirror_device, exc)
+                    mirror_stream = None
             try:
                 with sd.RawOutputStream(samplerate=STREAM_SAMPLE_RATE, channels=STREAM_CHANNELS, dtype="int16") as stream:
                     while True:
@@ -397,8 +483,18 @@ class EdgeTTSPlayer:
                         if not data:
                             break
                         stream.write(data)
+                        if mirror_stream is not None:
+                            try:
+                                mirror_stream.write(data)
+                            except Exception:
+                                mirror_stream = None  # drop the mirror, keep the main voice
             except BaseException as exc:  # pragma: no cover - hardware dependent.
                 playback_error.append(exc)
+            finally:
+                if mirror_stream is not None:
+                    with contextlib.suppress(Exception):
+                        mirror_stream.stop()
+                        mirror_stream.close()
 
         playback_thread = threading.Thread(target=_decode_and_play, daemon=True)
         playback_thread.start()
@@ -433,3 +529,11 @@ class EdgeTTSPlayer:
         if playback_error:
             raise TTSConfigurationError(f"Falha no playback streaming Edge TTS: {playback_error[0]}")
         return wrote_audio
+
+    async def play_stream(self, provider: Any, text: str, *, volume: float = 1.0) -> bool:
+        """Play any provider that exposes stream_audio_chunks() (MP3) as it arrives.
+
+        The piping logic is provider-agnostic, so ElevenLabs streaming reuses the
+        exact same ffmpeg→sounddevice pipeline as Edge.
+        """
+        return await self.play_edge_streaming(provider, text, volume=volume)

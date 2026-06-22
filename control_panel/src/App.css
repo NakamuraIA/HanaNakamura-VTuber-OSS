@@ -52,14 +52,58 @@
   --elev-card: 0 10px 30px rgba(0, 0, 0, 0.35);
 }
 
+:root {
+  /* Fonte controlada pela Acessibilidade (Personalização). Padrão = Inter. */
+  --acc-font: 'Inter', 'Segoe UI', sans-serif;
+}
+
 body {
   margin: 0;
   padding: 0;
   /* Background agora fica a cargo do CyberBackground.tsx para efeitos 3D, mas mantemos fallback aqui */
   background-color: var(--bg-darkest);
   color: var(--text-primary);
-  font-family: 'Inter', 'Segoe UI', sans-serif;
+  font-family: var(--acc-font);
   overflow: hidden;
+}
+
+/* ===== Acessibilidade (dislexia / TDAH) =================================== */
+
+/* Leitura espaçada: mais respiro entre letras e linhas ajuda na dislexia. */
+.acc-spacing body,
+.acc-spacing p,
+.acc-spacing span,
+.acc-spacing li,
+.acc-spacing td,
+.acc-spacing label,
+.acc-spacing input,
+.acc-spacing textarea,
+.acc-spacing button {
+  letter-spacing: 0.04em !important;
+  word-spacing: 0.12em !important;
+  line-height: 1.7 !important;
+}
+
+/* Menos animação: corta animações/transições e as partículas do fundo.
+   Reduz distração (TDAH) e poupa a máquina fraca. */
+.acc-reduce-motion *,
+.acc-reduce-motion *::before,
+.acc-reduce-motion *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+}
+.acc-reduce-motion canvas {
+  display: none !important;
+}
+
+/* Modo foco: esconde orbes de brilho decorativos (divs com blur-[NNpx]) e
+   suaviza sombras neon, deixando só o conteúdo. */
+.acc-focus div[class*="blur-["] {
+  display: none !important;
+}
+.acc-focus * {
+  text-shadow: none !important;
 }
 
 /* Native <select> dropdowns: force dark rendering so the option list isn't the

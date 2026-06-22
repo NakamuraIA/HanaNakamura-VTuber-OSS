@@ -9,7 +9,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from hana_agent_oss.memory.semantic import semantic_memory_status
+from hana_agent_oss.memory.semantic import (
+    cosine_similarity,
+    embed_query,
+    get_embedding_provider,
+    is_semantic_enabled,
+    semantic_memory_status,
+)
 from hana_agent_oss.memory.sqlite import SQLiteStore
 
 
@@ -26,6 +32,11 @@ IMPORTANCE_SCORES = {
     "high": 0.85,
     "critical": 1.0,
 }
+
+# Categories that describe the USER (Hana's owner). These are always-on profile
+# context: they must reach the prompt every turn so Hana respects likes/dislikes
+# and personal facts even when the current message does not mention them.
+PROFILE_CATEGORIES = ("preference_like", "preference_dislike", "personal_fact")
 
 MEMORY_ITEM_V2_COLUMNS = {
     "status": "TEXT NOT NULL DEFAULT 'active'",
@@ -265,6 +276,11 @@ class MemoryStore(SQLiteStore):
             if status != MEMORY_STATUS_DELETED:
                 conn.execute("INSERT INTO memory_fts (id, text) VALUES (?, ?)", (row["id"], row["text"]))
 
+    # Rotation: keep the active events file small (it is fully read on every
+    # context build), but NEVER lose events — overflow goes to an archive file.
+    EVENTS_ROTATE_BYTES = 5 * 1024 * 1024  # rotate when the active file passes ~5 MB
+    EVENTS_KEEP_LINES = 4000               # newest lines kept in the active file
+
     def append_event(self, role: str, content: str, *, channel: str = "control_center", metadata: dict[str, Any] | None = None) -> dict[str, Any]:
         event = {
             "id": str(uuid.uuid4()),
@@ -276,7 +292,31 @@ class MemoryStore(SQLiteStore):
         }
         with self.events_path.open("a", encoding="utf-8") as handle:
             handle.write(_json_dumps(event) + "\n")
+        self._rotate_events_if_needed()
         return event
+
+    def _rotate_events_if_needed(self) -> None:
+        """Move the oldest events to the archive when the active file grows too big.
+
+        Without this, hana_events.jsonl grows forever and every context build
+        re-reads the whole file, slowing Hana down over time. Nothing is deleted:
+        old events are appended to `<name>.archive.jsonl` in original order.
+        """
+        try:
+            if not self.events_path.exists() or self.events_path.stat().st_size < self.EVENTS_ROTATE_BYTES:
+                return
+            lines = [line for line in self.events_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+            if len(lines) <= self.EVENTS_KEEP_LINES:
+                return
+            overflow = lines[: -self.EVENTS_KEEP_LINES]
+            kept = lines[-self.EVENTS_KEEP_LINES:]
+            archive_path = self.events_path.with_suffix(".archive.jsonl")
+            with archive_path.open("a", encoding="utf-8") as handle:
+                handle.write("\n".join(overflow) + "\n")
+            self.events_path.write_text("\n".join(kept) + "\n", encoding="utf-8")
+        except Exception:
+            # Rotation must never break event logging itself.
+            return
 
     def recent_events(self, *, limit: int = 50, channel: str | None = None) -> list[dict[str, Any]]:
         if not self.events_path.exists():
@@ -439,6 +479,34 @@ class MemoryStore(SQLiteStore):
             ).fetchall()
         return [self._row_to_memory(row) for row in rows]
 
+    def profile_memories(self, *, per_category: int = 12) -> list[dict[str, Any]]:
+        """Return always-on user-profile memories (likes, dislikes, personal facts).
+
+        These are injected into every prompt so Hana keeps respecting the user's
+        preferences even when the current message does not mention them. Ordered
+        by importance then recency, capped per category to stay cheap on tokens.
+        Never raises: profile retrieval must not break a turn.
+        """
+        cap = max(1, int(per_category or 12))
+        results: list[dict[str, Any]] = []
+        try:
+            with self._connect() as conn:
+                for category in PROFILE_CATEGORIES:
+                    rows = conn.execute(
+                        f"""
+                        SELECT *
+                        FROM memory_items
+                        WHERE status = ? AND category = ?
+                        ORDER BY pinned DESC, importance_score DESC, updated_at DESC
+                        LIMIT ?
+                        """,
+                        (MEMORY_STATUS_ACTIVE, category, cap),
+                    ).fetchall()
+                    results.extend(self._row_to_memory(row) for row in rows)
+        except sqlite3.OperationalError:
+            return []
+        return results
+
     def search(
         self,
         query: str,
@@ -496,10 +564,146 @@ class MemoryStore(SQLiteStore):
                 ).fetchall()
                 text_scores = {str(row["id"]): 0.35 for row in rows}
 
+        # Semantic layer (optional, env-gated): blend vector similarity into the
+        # text scores so Hana finds memories by meaning, not just exact words.
+        # Adds candidates FTS missed and boosts the ones both agree on. Degrades
+        # to pure FTS when disabled or on any failure — never breaks a search.
+        if is_semantic_enabled():
+            vec_scores = self._vector_scores(query, limit=safe_limit * 4, status=status)
+            if vec_scores:
+                missing_ids = [mid for mid in vec_scores if mid not in text_scores]
+                if missing_ids:
+                    rows = list(rows) + self._rows_by_ids(missing_ids, status=status)
+                for mid, vscore in vec_scores.items():
+                    # Keep the stronger of FTS vs vector so either signal can surface it.
+                    text_scores[mid] = max(text_scores.get(mid, 0.0), vscore)
+
         if not rows:
             return []
         memories = [self._row_to_memory(row) for row in rows]
         return self._rank_memories(memories, text_scores, touch=touch)[:safe_limit]
+
+    def _rows_by_ids(self, memory_ids: list[str], *, status: str) -> list[sqlite3.Row]:
+        """Fetch raw rows for the given ids honoring the lifecycle status filter."""
+        ids = [item for item in dict.fromkeys(str(mid).strip() for mid in memory_ids) if item]
+        if not ids:
+            return []
+        placeholders = ",".join("?" for _ in ids)
+        filter_sql, filter_params = self._status_filter_sql(status)
+        with self._connect() as conn:
+            return conn.execute(
+                f"SELECT * FROM memory_items WHERE id IN ({placeholders}) AND {filter_sql}",
+                (*ids, *filter_params),
+            ).fetchall()
+
+    def _vector_scores(self, query: str, *, limit: int, status: str) -> dict[str, float]:
+        """Cosine-rank stored embeddings against the query. {} when off/empty.
+
+        Brute-force in Python: for a personal store (thousands of vectors) this is
+        instant and avoids the sqlite-vec native dependency. Returns normalized
+        scores in [0, 1] for the top `limit` matches. Never raises.
+        """
+        clean = (query or "").strip()
+        if not clean:
+            return {}
+        try:
+            query_vec = embed_query(clean)
+            if not query_vec:
+                return {}
+            filter_sql, filter_params = self._status_filter_sql(status, alias="m")
+            with self._connect() as conn:
+                rows = conn.execute(
+                    f"""
+                    SELECT e.memory_id AS id, e.vector_json AS vector_json
+                    FROM memory_embeddings e
+                    JOIN memory_items m ON m.id = e.memory_id
+                    WHERE {filter_sql}
+                    """,
+                    tuple(filter_params),
+                ).fetchall()
+            scored: list[tuple[str, float]] = []
+            for row in rows:
+                vector = _safe_json_loads(row["vector_json"], None)
+                if not isinstance(vector, list):
+                    continue
+                sim = cosine_similarity(query_vec, vector)
+                if sim <= 0.0:
+                    continue
+                scored.append((str(row["id"]), (sim + 1.0) / 2.0))  # map [-1,1] -> [0,1]
+            scored.sort(key=lambda item: item[1], reverse=True)
+            return {mid: score for mid, score in scored[: max(1, int(limit))]}
+        except sqlite3.OperationalError:
+            return {}
+        except Exception:
+            return {}
+
+    def embed_pending_memories(self, *, max_items: int = 200, batch_size: int = 32) -> dict[str, Any]:
+        """Index memories whose embedding_state='pending' (background only).
+
+        Called by the sleep scheduler, never inline in a turn. Embeds in batches,
+        upserts into memory_embeddings, and flips embedding_state to 'done'. No-op
+        when semantic memory is disabled. Returns a small stats payload.
+        """
+        provider = get_embedding_provider()
+        if provider is None:
+            return {"ok": True, "skipped": "disabled", "embedded": 0}
+
+        with self._connect() as conn:
+            pending = conn.execute(
+                """
+                SELECT id, text FROM memory_items
+                WHERE embedding_state = 'pending' AND status != ?
+                ORDER BY pinned DESC, importance_score DESC, updated_at DESC
+                LIMIT ?
+                """,
+                (MEMORY_STATUS_DELETED, max(1, int(max_items))),
+            ).fetchall()
+        if not pending:
+            return {"ok": True, "embedded": 0, "remaining": 0}
+
+        embedded = 0
+        failed = 0
+        for start in range(0, len(pending), max(1, int(batch_size))):
+            chunk = pending[start : start + max(1, int(batch_size))]
+            texts = [str(row["text"] or "") for row in chunk]
+            try:
+                vectors = provider.embed(texts)
+            except Exception:
+                failed += len(chunk)
+                continue
+            if len(vectors) != len(chunk):
+                failed += len(chunk)
+                continue
+            timestamp = now_iso()
+            with self._connect() as conn:
+                for row, vector in zip(chunk, vectors):
+                    conn.execute(
+                        """
+                        INSERT INTO memory_embeddings
+                          (memory_id, provider, model, dimensions, vector_json, created_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(memory_id) DO UPDATE SET
+                          provider = excluded.provider,
+                          model = excluded.model,
+                          dimensions = excluded.dimensions,
+                          vector_json = excluded.vector_json,
+                          updated_at = excluded.updated_at
+                        """,
+                        (str(row["id"]), "fastembed", provider.model, len(vector), _json_dumps(list(vector)), timestamp, timestamp),
+                    )
+                    conn.execute(
+                        "UPDATE memory_items SET embedding_state = 'done' WHERE id = ?",
+                        (str(row["id"]),),
+                    )
+                conn.commit()
+            embedded += len(chunk)
+
+        with self._connect() as conn:
+            remaining = conn.execute(
+                "SELECT COUNT(*) AS c FROM memory_items WHERE embedding_state = 'pending' AND status != ?",
+                (MEMORY_STATUS_DELETED,),
+            ).fetchone()["c"]
+        return {"ok": failed == 0, "embedded": embedded, "failed": failed, "remaining": int(remaining)}
 
     def delete_memory(self, memory_id: str, *, hard: bool = False) -> bool:
         """Delete a memory using soft-delete by default."""

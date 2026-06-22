@@ -1,8 +1,8 @@
 # Trademark and Brand Policy
 
-The names **Hana Nakamura** and **Hana Agent OSS**, the official logo, character
+The names **Hana Operador** and **Hana Agent OSS**, the official logo, character
 identity, visual design, voice/persona assets and branding belong to the
-original creator, NakamuraIA.
+original creator, OperadorIA.
 
 This policy is not a replacement for the AGPL-3.0-only license. The source code
 is licensed under AGPL-3.0-only. The official project identity and assets are
@@ -18,10 +18,10 @@ handled separately by this brand policy and by asset-specific license notices.
 
 ## You May Not
 
-- claim you created the original Hana Nakamura project;
-- remove attribution to NakamuraIA;
+- claim you created the original Hana Operador project;
+- remove attribution to OperadorIA;
 - present a fork as the official Hana project;
-- use the official Hana Nakamura name, logo, character identity or branding for
+- use the official Hana Operador name, logo, character identity or branding for
   a commercial product without explicit permission;
 - rename a near-identical copy and sell it as your own original work;
 - imply official endorsement without permission.
@@ -34,10 +34,10 @@ handled separately by this brand policy and by asset-specific license notices.
 
 ## Not Acceptable
 
-- `Official Hana Nakamura`
+- `Official Hana Operador`
 - `Hana Pro`
 - `New Hana`
-- `Hana Nakamura Enterprise`
+- `Hana Operador Enterprise`
 - any branding that suggests official endorsement.
 
 ## Notes

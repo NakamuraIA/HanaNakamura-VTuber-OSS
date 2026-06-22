@@ -31,6 +31,25 @@ function formatMetric(value: number | null | undefined, suffix: string): string 
   return typeof value === "number" && Number.isFinite(value) ? `${value.toFixed(1)}${suffix}` : "";
 }
 
+function pricePerMillion(value: unknown): string {
+  /** OpenRouter reporta preco POR TOKEN; humanos leem por 1M tokens. */
+  const n = Number(value);
+  if (!Number.isFinite(n)) return "?";
+  const perM = n * 1_000_000;
+  if (perM === 0) return "$0";
+  if (perM >= 100) return `$${perM.toFixed(0)}`;
+  if (perM < 0.01) return "<$0.01";
+  return `$${perM.toFixed(2)}`;
+}
+
+function endpointPriceLabel(endpoint: OpenRouterEndpoint): string {
+  const hasIn = endpoint.pricing?.prompt != null && endpoint.pricing?.prompt !== "";
+  const hasOut = endpoint.pricing?.completion != null && endpoint.pricing?.completion !== "";
+  if (!hasIn && !hasOut) return "";
+  if (Number(endpoint.pricing?.prompt) === 0 && Number(endpoint.pricing?.completion) === 0) return "grátis";
+  return `in ${pricePerMillion(endpoint.pricing?.prompt)} / out ${pricePerMillion(endpoint.pricing?.completion)} /M`;
+}
+
 export function OpenRouterEndpointPicker({ model, value, onChange, compact = false }: OpenRouterEndpointPickerProps) {
   const routing = { ...DEFAULT_OPENROUTER_ROUTING, ...(value || {}) };
   const [endpoints, setEndpoints] = useState<OpenRouterEndpoint[]>([]);
@@ -73,7 +92,7 @@ export function OpenRouterEndpointPicker({ model, value, onChange, compact = fal
         formatMetric(endpoint.throughputLast30m, " tok/s"),
       ].filter(Boolean).join(" · "),
       priceScore: endpointPrice(endpoint),
-      priceLabel: endpoint.pricing?.prompt ? `in ${endpoint.pricing.prompt} / out ${endpoint.pricing.completion || "?"}` : "",
+      priceLabel: endpointPriceLabel(endpoint),
       contextTokens: endpoint.contextLength || undefined,
       capabilityScore: endpoint.supportedParameters?.length || 0,
       performanceScore: endpoint.throughputLast30m ?? (
@@ -106,7 +125,11 @@ export function OpenRouterEndpointPicker({ model, value, onChange, compact = fal
       <CatalogPicker
         value={routing.preferredEndpoint}
         options={options}
-        onChange={(selected) => update("preferredEndpoint", selected)}
+        onChange={(selected) =>
+          // Escolher um endpoint especifico FIXA nele (sem fallback). Voltar pro
+          // "Automatico" religa o fallback padrao do OpenRouter.
+          onChange({ ...routing, preferredEndpoint: selected, allowFallbacks: selected ? false : true })
+        }
         favoriteNamespace={`openrouter-endpoints:${model}`}
         placeholder="Automático pelo OpenRouter"
         searchPlaceholder="Buscar endpoint, quantização ou provider..."
@@ -116,7 +139,7 @@ export function OpenRouterEndpointPicker({ model, value, onChange, compact = fal
         endpointFilters
       />
       <div className="mt-3 grid grid-cols-2 gap-2 lg:grid-cols-4">
-        <label className="flex items-center gap-2 text-[10px] text-[var(--text-secondary)]"><input type="checkbox" checked={routing.allowFallbacks} onChange={(e) => update("allowFallbacks", e.target.checked)} /> fallback</label>
+        <label className="flex items-center gap-2 text-[10px] text-[var(--text-secondary)]" title="Se ligado, o OpenRouter pode trocar pra outro provider. Desligue pra FIXAR no escolhido."><input type="checkbox" checked={routing.allowFallbacks} onChange={(e) => update("allowFallbacks", e.target.checked)} /> permitir trocar de provider</label>
         <label className="flex items-center gap-2 text-[10px] text-[var(--text-secondary)]"><input type="checkbox" checked={routing.requireParameters} onChange={(e) => update("requireParameters", e.target.checked)} /> exigir parâmetros</label>
         <label className="flex items-center gap-2 text-[10px] text-[var(--text-secondary)]"><input type="checkbox" checked={routing.dataCollection === "deny"} onChange={(e) => update("dataCollection", e.target.checked ? "deny" : "allow")} /> negar coleta</label>
         <label className="flex items-center gap-2 text-[10px] text-[var(--text-secondary)]"><input type="checkbox" checked={routing.zdr} onChange={(e) => update("zdr", e.target.checked)} /> <Gauge size={11} /> exigir ZDR</label>

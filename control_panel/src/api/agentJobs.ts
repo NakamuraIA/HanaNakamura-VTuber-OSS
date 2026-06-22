@@ -5,7 +5,7 @@ const EMPTY_AGENT_JOBS: AgentJobsResponse = { ok: false, jobs: [], active: [] };
 
 export const AgentJobsApi = {
   /**
-   * Lists Omni background jobs retained by the backend.
+   * Lists background agent jobs retained by the backend.
    */
   getAgentJobs: async (): Promise<AgentJobsResponse> => {
     return readJson("/api/agent-jobs", EMPTY_AGENT_JOBS);
@@ -28,9 +28,9 @@ export const AgentJobsApi = {
   },
 
   /**
-   * Requests cancellation for active Omni jobs, optionally scoped by agent.
+   * Requests cancellation for active background jobs, optionally scoped by agent.
    */
-  cancelActiveAgentJobs: async (agent?: "omni", reason = "control_panel") => {
+  cancelActiveAgentJobs: async (agent?: string, reason = "control_panel") => {
     try {
       const res = await backendFetch("/api/agent-jobs/cancel-active", {
         method: "POST",

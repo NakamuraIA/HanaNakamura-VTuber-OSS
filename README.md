@@ -1,7 +1,7 @@
 ﻿# Hana Agent OSS
 
 Hana Agent OSS is a local multimodal agent framework built around Hana
-Nakamura.
+Operador.
 
 The project is no longer VTuber-first. The VTuber surface is now an optional
 interface or subagent. The product is the Agent Core: one backend that can
@@ -221,7 +221,7 @@ usage documentation.
 
 Source code is licensed under **AGPL-3.0-only**. See [LICENSE](LICENSE).
 
-The Hana Nakamura identity, official brand, official character assets and
+The Hana Operador identity, official brand, official character assets and
 official promotional media are protected separately by project brand policy.
 See [NOTICE](NOTICE), [TRADEMARK.md](TRADEMARK.md) and
 [assets/LICENSE.md](assets/LICENSE.md).

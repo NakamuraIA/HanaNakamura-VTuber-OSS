@@ -1,8 +1,15 @@
 import { useState, useEffect } from "react";
-import { Paintbrush, Save, CheckCircle2, Palette } from "lucide-react";
+import { Paintbrush, Save, CheckCircle2, Palette, Accessibility } from "lucide-react";
 import { TabHeader } from "../components/shared/TabHeader";
 import { Card } from "../components/shared/Card";
 import { Button } from "../components/shared/Button";
+import {
+  ACCESSIBILITY_FONTS,
+  AccessibilityConfig,
+  applyAccessibility,
+  loadAccessibility,
+  saveAccessibility,
+} from "../../accessibility";
 
 const PRESET_COLORS = [
   { name: "🌸 Rosa Floral", hex: "#f472b6" },
@@ -36,6 +43,16 @@ export function TabPersonalizacao() {
   const [customHex, setCustomHex] = useState("#a855f7");
   const [opacity, setOpacity] = useState(1.0);
   const [bgTone, setBgTone] = useState(DEFAULT_BG_TONE);
+  const [acc, setAcc] = useState<AccessibilityConfig>(() => loadAccessibility());
+
+  const updateAcc = (patch: Partial<AccessibilityConfig>) => {
+    setAcc((prev) => {
+      const next = { ...prev, ...patch };
+      applyAccessibility(next);
+      saveAccessibility(next);
+      return next;
+    });
+  };
 
   // O ideal seria carregar isso do Backend na inicialização
   useEffect(() => {
@@ -220,6 +237,80 @@ export function TabPersonalizacao() {
         </div>
 
       </div>
+
+      {/* CARD: ACESSIBILIDADE (dislexia / TDAH) */}
+      <Card className="mt-6">
+        <div className="flex items-center gap-3 mb-2">
+          <div className="w-10 h-10 rounded-xl bg-emerald-500/20 border border-emerald-500 flex items-center justify-center text-emerald-300">
+            <Accessibility size={20} />
+          </div>
+          <div>
+            <h3 className="font-bold text-[var(--text-primary)] text-lg">Acessibilidade</h3>
+            <p className="text-xs text-[var(--text-muted)]">
+              Leitura mais fácil (dislexia) e menos distração (TDAH). Aplica na hora e fica salvo.
+            </p>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-5 mt-5">
+          {/* Fonte */}
+          <div>
+            <span className="text-xs text-[var(--text-muted)] uppercase tracking-wider mb-2 block">Fonte de leitura</span>
+            <div className="flex flex-wrap gap-2">
+              {ACCESSIBILITY_FONTS.map((font) => (
+                <button
+                  key={font.id}
+                  onClick={() => updateAcc({ font: font.id })}
+                  className={`px-4 py-2 rounded-lg border text-sm transition-all ${
+                    acc.font === font.id
+                      ? "border-emerald-400 bg-emerald-500/15 text-emerald-200"
+                      : "border-[var(--border-strong)] bg-black/40 text-[var(--text-secondary)] hover:border-white/30"
+                  }`}
+                  style={{ fontFamily: font.stack }}
+                >
+                  {font.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Tamanho */}
+          <div>
+            <span className="text-xs text-[var(--text-muted)] uppercase tracking-wider mb-2 block">
+              Tamanho do texto: <b className="text-[var(--text-secondary)]">{acc.fontScale}%</b>
+            </span>
+            <input
+              type="range" min="85" max="140" step="5"
+              className="w-full h-2 bg-[rgba(0,0,0,0.5)] rounded-lg appearance-none cursor-pointer accent-emerald-400"
+              value={acc.fontScale}
+              onChange={(e) => updateAcc({ fontScale: parseInt(e.target.value) })}
+            />
+          </div>
+
+          {/* Toggles */}
+          {[
+            { key: "spacing" as const, label: "Leitura espaçada", hint: "Mais espaço entre letras e linhas — ajuda na dislexia." },
+            { key: "reduceMotion" as const, label: "Menos animação", hint: "Desliga animações e partículas do fundo. Menos distração e mais leve no PC." },
+            { key: "focusMode" as const, label: "Modo foco", hint: "Esconde brilhos decorativos e deixa só o conteúdo." },
+          ].map((item) => (
+            <label
+              key={item.key}
+              className="flex items-start gap-3 bg-black/30 border border-[var(--border-strong)] rounded-xl p-3 cursor-pointer hover:border-white/25 transition-all"
+            >
+              <input
+                type="checkbox"
+                checked={acc[item.key]}
+                onChange={(e) => updateAcc({ [item.key]: e.target.checked })}
+                className="mt-1 accent-emerald-400 w-4 h-4"
+              />
+              <span>
+                <span className="block text-sm font-bold text-[var(--text-primary)]">{item.label}</span>
+                <span className="block text-xs text-[var(--text-muted)]">{item.hint}</span>
+              </span>
+            </label>
+          ))}
+        </div>
+      </Card>
 
       {/* Alerta de Sucesso Float */}
       <div 

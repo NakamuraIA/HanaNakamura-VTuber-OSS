@@ -61,6 +61,21 @@ class McpStdioClient:
             resolved[str(key)] = next_value
         return resolved
 
+    async def _run_with_retry(self, work, *, timeout: float):
+        """Run an MCP session once, retrying a single time on transient transport errors.
+
+        Each call spawns a fresh stdio subprocess (e.g. `npx tavily-mcp`); a cold npx
+        start or a flaky network handshake can blow up the anyio TaskGroup on the first
+        try and succeed on the second. Config errors (missing env / SDK) are NOT retried.
+        """
+        try:
+            return await asyncio.wait_for(work(), timeout=timeout)
+        except (McpEnvMissing, McpSdkUnavailable):
+            raise
+        except BaseException:  # noqa: BLE001 - transient transport/TaskGroup failure.
+            await asyncio.sleep(0.4)
+            return await asyncio.wait_for(work(), timeout=timeout)
+
     async def list_tools(self, config: McpServerConfig) -> list[McpToolInfo]:
         async def work() -> list[McpToolInfo]:
             async with self._session(config) as session:
@@ -68,7 +83,7 @@ class McpStdioClient:
                 result = await session.list_tools()
                 return [self._tool_info(config.id, tool) for tool in result.tools]
 
-        return await asyncio.wait_for(work(), timeout=config.timeout)
+        return await self._run_with_retry(work, timeout=config.timeout)
 
     async def call_tool(self, config: McpServerConfig, tool_name: str, arguments: dict[str, Any]) -> McpCallResult:
         async def work() -> McpCallResult:
@@ -77,7 +92,7 @@ class McpStdioClient:
                 result = await session.call_tool(tool_name, arguments)
                 return self._call_result(result)
 
-        return await asyncio.wait_for(work(), timeout=config.timeout)
+        return await self._run_with_retry(work, timeout=config.timeout)
 
     def _session(self, config: McpServerConfig):
         try:

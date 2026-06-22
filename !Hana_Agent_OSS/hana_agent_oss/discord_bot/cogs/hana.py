@@ -1,91 +1,203 @@
 from __future__ import annotations
 
 import base64
-import asyncio
+import io
 import logging
-import os
-import shutil
-import tempfile
-from pathlib import Path
 from typing import Any
 
 import discord
+from discord import app_commands
 from discord.ext import commands
 
 from hana_agent_oss.discord_bot.backend_client import HanaBackendClient
+from hana_agent_oss.discord_bot.delivery import build_payloads, code_file_to_discord
 
 logger = logging.getLogger(__name__)
 
 
-def _ffmpeg_path() -> str:
-    """Return the FFmpeg executable used for optional Discord TTS playback."""
-    for env_name in ("FFMPEG_PATH", "HANA_FFMPEG_PATH"):
-        value = os.environ.get(env_name)
-        if value:
-            return value
-    local = Path("C:/Ffmpeg/ffmpeg.exe")
-    if local.exists():
-        return str(local)
-    return shutil.which("ffmpeg") or "ffmpeg"
+async def _attachment_to_image_payload(attachment: discord.Attachment) -> dict[str, Any] | None:
+    """Baixa um anexo de imagem do Discord e devolve no formato do backend (base64)."""
+    content_type = str(getattr(attachment, "content_type", "") or "")
+    if not content_type.startswith("image/"):
+        return None
+    data = await attachment.read()
+    b64 = base64.b64encode(data).decode("ascii")
+    return {
+        "type": content_type,
+        "name": attachment.filename or "imagem.png",
+        "data": f"data:{content_type};base64,{b64}",
+    }
 
 
 class HanaCog(commands.Cog):
-    """Discord text command bridge for the local Hana backend."""
+    """Slash /hana + chatbot natural (DM/menção) ligando o Discord ao cérebro local."""
 
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
         self.backend = HanaBackendClient()
 
-    @commands.command(name="hana")
-    async def hana(self, ctx: commands.Context, *, mensagem: str) -> None:
-        """Envia uma mensagem para a Hana AI e recebe a resposta."""
-        async with ctx.typing():
+    # ---- backend ---------------------------------------------------------- #
+
+    async def _ask_backend(
+        self,
+        *,
+        text: str,
+        author: discord.User | discord.Member,
+        channel: Any,
+        guild: discord.Guild | None,
+        attachments: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        """Manda um turno de texto do Discord para a Hana e devolve a resposta."""
+        payload: dict[str, Any] = {
+            "text": text,
+            "userId": author.id,
+            "displayName": getattr(author, "display_name", author.name),
+            "guildId": guild.id if guild else "",
+            "textChannelId": getattr(channel, "id", ""),
+        }
+        if attachments:
+            payload["attachments"] = attachments
+        return await self.backend.send_message(payload)
+
+    async def _media_files(self, result: dict[str, Any]) -> list[discord.File]:
+        """Baixa as imagens geradas/editadas pelo backend como discord.File."""
+        files: list[discord.File] = []
+        for item in result.get("media") or []:
+            url = str(item.get("url") or "")
+            if not url:
+                continue
             try:
-                resposta = await self._consultar_hana(mensagem, ctx.author, ctx)
-                await ctx.reply(str(resposta.get("text") or "Sem resposta.")[:1900])
-                audio = resposta.get("audio")
-                if ctx.voice_client and isinstance(audio, dict) and audio.get("audioBase64"):
-                    await self._play_audio(ctx.voice_client, audio)
-            except Exception as exc:
-                logger.exception("Erro ao consultar Hana pelo Discord")
-                await ctx.reply(f"Erro ao contactar a Hana: `{exc}`")
+                data = await self.backend.fetch_media_bytes(url)
+            except Exception:
+                logger.warning("Falha ao baixar mídia do backend: %s", url)
+                continue
+            files.append(discord.File(io.BytesIO(data), filename=str(item.get("name") or "imagem.png")))
+        return files
 
-    async def _consultar_hana(self, mensagem: str, autor: discord.User | discord.Member, ctx: commands.Context) -> dict[str, Any]:
-        """Call the backend Discord message endpoint with author metadata."""
-        return await self.backend.send_message(
-            {
-                "text": mensagem,
-                "userId": autor.id,
-                "displayName": getattr(autor, "display_name", autor.name),
-                "guildId": ctx.guild.id if ctx.guild else "",
-                "textChannelId": ctx.channel.id,
-                "voiceChannelId": ctx.voice_client.channel.id if ctx.voice_client else "",
-            }
-        )
+    # ---- entrega de texto ------------------------------------------------- #
 
-    async def _play_audio(self, voice_client: discord.VoiceClient, audio: dict[str, Any]) -> None:
-        """Play backend-generated TTS in the current Discord voice channel."""
-        suffix = ".wav" if "wav" in str(audio.get("mimeType") or "") else ".mp3"
-        fd, raw_path = tempfile.mkstemp(prefix="hana-discord-text-tts-", suffix=suffix)
-        os.close(fd)
-        path = Path(raw_path)
-        path.write_bytes(base64.b64decode(str(audio["audioBase64"])))
-        done = asyncio.Event()
+    async def _deliver_followup(self, interaction: discord.Interaction, text: str) -> None:
+        chunks, code_file = build_payloads(text)
+        file = code_file_to_discord(code_file) if code_file else None
+        for index, chunk in enumerate(chunks):
+            kwargs: dict[str, Any] = {"content": chunk or "​"}
+            if index == len(chunks) - 1 and file is not None:
+                kwargs["file"] = file
+            await interaction.followup.send(**kwargs)
 
-        def _after(error: Exception | None) -> None:
-            if error:
-                logger.warning("[Discord] Text command playback failed: %s", error)
-            self.bot.loop.call_soon_threadsafe(done.set)
+    async def _deliver_channel(self, message: discord.Message, text: str) -> None:
+        chunks, code_file = build_payloads(text)
+        file = code_file_to_discord(code_file) if code_file else None
+        first = True
+        for index, chunk in enumerate(chunks):
+            kwargs: dict[str, Any] = {"content": chunk or "​"}
+            if index == len(chunks) - 1 and file is not None:
+                kwargs["file"] = file
+            if first:
+                await message.reply(**kwargs)
+                first = False
+            else:
+                await message.channel.send(**kwargs)
 
+    # ---- slash /hana ------------------------------------------------------ #
+
+    @app_commands.command(name="hana", description="Fale com a Hana (IA)")
+    @app_commands.describe(
+        conteudo="Mensagem para a Hana",
+        arquivo="Imagem, PDF ou texto para contexto",
+        url="URL pública para contexto",
+        criar_imagem="Gera uma imagem",
+        editar_imagem="Edita a imagem anexada",
+    )
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    async def hana(
+        self,
+        interaction: discord.Interaction,
+        conteudo: str,
+        arquivo: discord.Attachment | None = None,
+        url: str | None = None,
+        criar_imagem: bool = False,
+        editar_imagem: bool = False,
+    ) -> None:
+        await interaction.response.defer(thinking=True)
         try:
-            source = discord.FFmpegPCMAudio(str(path), executable=_ffmpeg_path())
-            if not voice_client.is_playing():
-                voice_client.play(source, after=_after)
-                await done.wait()
-        finally:
+            # 1) Gerar imagem nova
+            if criar_imagem:
+                result = await self.backend.generate_image(conteudo)
+                if not result.get("ok"):
+                    await interaction.followup.send(f"Não consegui gerar a imagem: `{result.get('error') or 'erro'}`")
+                    return
+                files = await self._media_files(result)
+                await interaction.followup.send(content=(result.get("text") or "Imagem gerada.")[:1900], files=files or None)
+                return
+
+            # 2) Editar imagem anexada
+            if editar_imagem:
+                if arquivo is None:
+                    await interaction.followup.send("Pra editar, anexe a imagem em `arquivo`. 🙏")
+                    return
+                img_payload = await _attachment_to_image_payload(arquivo)
+                if img_payload is None:
+                    await interaction.followup.send("O anexo precisa ser uma imagem pra eu editar.")
+                    return
+                result = await self.backend.edit_image(conteudo, [img_payload])
+                if not result.get("ok"):
+                    await interaction.followup.send(f"Não consegui editar a imagem: `{result.get('error') or 'erro'}`")
+                    return
+                files = await self._media_files(result)
+                await interaction.followup.send(content=(result.get("text") or "Imagem editada.")[:1900], files=files or None)
+                return
+
+            # 3) Conversa de texto (com arquivo/url como contexto)
+            text = conteudo
+            if url:
+                text = f"{conteudo}\n\n[Contexto — URL fornecida: {url}]"
+            attachments: list[dict[str, Any]] = []
+            if arquivo is not None:
+                img = await _attachment_to_image_payload(arquivo)
+                if img is not None:
+                    attachments.append(img)
+                else:
+                    text = f"{text}\n\n[Anexo não-imagem ignorado: {arquivo.filename}]"
+            result = await self._ask_backend(
+                text=text,
+                author=interaction.user,
+                channel=interaction.channel,
+                guild=interaction.guild,
+                attachments=attachments or None,
+            )
+            await self._deliver_followup(interaction, str(result.get("text") or "(sem resposta)"))
+        except Exception as exc:
+            logger.exception("Erro no slash /hana")
+            await interaction.followup.send(f"Erro ao falar com a Hana: `{exc}`")
+
+    # ---- chatbot natural (DM/menção) ------------------------------------- #
+
+    async def handle_natural_message(self, message: discord.Message, content: str) -> None:
+        """Responde uma mensagem natural (já validada como da dona em DM/menção)."""
+        attachments: list[dict[str, Any]] = []
+        for att in message.attachments:
+            img = await _attachment_to_image_payload(att)
+            if img is not None:
+                attachments.append(img)
+        if not content.strip() and not attachments:
+            return
+        try:
+            async with message.channel.typing():
+                result = await self._ask_backend(
+                    text=content or "(imagem anexada)",
+                    author=message.author,
+                    channel=message.channel,
+                    guild=message.guild,
+                    attachments=attachments or None,
+                )
+            await self._deliver_channel(message, str(result.get("text") or "(sem resposta)"))
+        except Exception as exc:
+            logger.exception("Erro ao responder mensagem natural do Discord")
             try:
-                path.unlink(missing_ok=True)
-            except OSError:
+                await message.reply(f"Erro ao falar com a Hana: `{exc}`")
+            except Exception:
                 pass
 
 

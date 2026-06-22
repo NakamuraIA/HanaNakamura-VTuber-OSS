@@ -1,4 +1,4 @@
-import { ChatConfig, ConnectionsConfig, LlmConfig, OmniStatus, PortabilityConfig, VisionMonitor, VoiceConfig, VoiceInputDevice, ImageConfig, OpenRouterEndpoint } from "../models/types";
+import { ChatConfig, ConnectionsConfig, LlmConfig, PortabilityConfig, VisionMonitor, VoiceConfig, VoiceInputDevice, ImageConfig, OpenRouterEndpoint } from "../models/types";
 import { BACKEND_URL, backendFetch, readJson, readLocalConnections } from "./core";
 
 const PROVIDER_ALIASES: Record<string, string> = {
@@ -30,8 +30,13 @@ export const DEFAULT_IMAGE_CONFIG: ImageConfig = {
 export const DEFAULT_LLM_CONFIG: LlmConfig = {
   llmProvider: "gemini_api",
   llmModel: "gemini-3.1-pro-preview",
+  agentProvider: "",
+  agentModel: "",
+  agentToolRounds: 40,
+  ttsByProvider: {},
   llmFilter: "",
   llmTemperature: 0.85,
+  groqThinking: true,
   openrouterRoutingByModel: {},
   visionModel: "gemini-3-flash-preview",
   ttsProvider: "google_cloud_tts",
@@ -71,7 +76,13 @@ export const DEFAULT_VOICE_CONFIG: VoiceConfig = {
   inputDeviceId: "",
   inputDeviceLabel: "",
   inputDeviceSource: "sounddevice",
+  secondOutputEnabled: false,
+  secondOutputDeviceId: "",
+  secondOutputDeviceLabel: "",
   vadThreshold: 0.035,
+  vadMode: "silero",
+  vadProbThreshold: 0.5,
+  bargeInEnabled: false,
   silenceTimeoutMs: 900,
   ttsEnabled: false,
   ttsProvider: "edge",
@@ -88,6 +99,7 @@ export const DEFAULT_VOICE_CONFIG: VoiceConfig = {
   ttsStyle: 0,
   ttsSpeakerBoost: true,
   speakTerminalEvents: true,
+  callMode: false,
 };
 
 export const DEFAULT_PORTABILITY_CONFIG: PortabilityConfig = {
@@ -280,19 +292,6 @@ export const ConfigApi = {
     }
   },
 
-  /**
-   * Checks whether the configured local Omni executor is reachable.
-   */
-  getOmniStatus: async (): Promise<OmniStatus> => {
-    return readJson("/api/config/omni/status", {
-      enabled: false,
-      ok: false,
-      online: false,
-      baseUrl: "http://127.0.0.1:8060",
-      error: "backend_unavailable",
-    });
-  },
-
   getCatalog: async () => {
     try {
       const res = await fetch(`${BACKEND_URL}/api/catalog`);
@@ -396,6 +395,20 @@ export const ConfigApi = {
     } catch (error) {
       console.error("Error fetching voice input devices", error);
       return [{ id: "browser_default", label: "Browser default microphone", source: "browser_media_recorder", isDefault: true, available: true }];
+    }
+  },
+
+  getVoiceOutputDevices: async (): Promise<VoiceInputDevice[]> => {
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/config/voice/output-devices`);
+      if (res.ok) {
+        const data = await res.json();
+        return data.devices || [];
+      }
+      throw new Error("Failed to fetch output devices");
+    } catch (error) {
+      console.error("Error fetching voice output devices", error);
+      return [];
     }
   },
 

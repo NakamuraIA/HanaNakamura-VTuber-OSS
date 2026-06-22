@@ -1,6 +1,6 @@
 # Hana Agent OSS Control Center
 
-Tauri 2 + React desktop interface for Hana Agent OSS and Hana Nakamura.
+Tauri 2 + React desktop interface for Hana Agent OSS and Hana Operador.
 
 The Control Center is the main GUI for chat, provider selection, memory, VTube Studio status and Agent Core traces.
 
@@ -82,7 +82,7 @@ tools and toggles allowlist entries.
 ## Terminal Agente View
 
 The `Terminal Agente` sidebar page is a lightweight operational console for
-voice-agent events. It renders a bounded visible log for Nakamura/Hana lines,
+voice-agent events. It renders a bounded visible log for Operador/Hana lines,
 listening, processing, speaking, model, emotion, vision, tool calls, tool
 results and errors.
 

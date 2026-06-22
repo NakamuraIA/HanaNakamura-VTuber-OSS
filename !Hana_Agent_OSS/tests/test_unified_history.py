@@ -72,14 +72,14 @@ def test_empty_memory_returns_empty_list(tmp_path) -> None:
 def test_single_channel_events_appear_in_history(tmp_path) -> None:
     memory = _make_memory(tmp_path)
     memory.append_event("user", "Oi Hana", channel=CHANNEL_CONTROL_CENTER)
-    memory.append_event("hana", "Oi Nakamura!", channel=CHANNEL_CONTROL_CENTER)
+    memory.append_event("hana", "Oi Operador!", channel=CHANNEL_CONTROL_CENTER)
 
     result = build_unified_history(memory, channel=CHANNEL_CONTROL_CENTER)
     assert len(result) == 2
     assert result[0]["role"] == "user"
     assert result[0]["content"] == "Oi Hana"
     assert result[1]["role"] == "model"
-    assert result[1]["content"] == "Oi Nakamura!"
+    assert result[1]["content"] == "Oi Operador!"
 
 
 def test_cross_channel_events_are_merged(tmp_path) -> None:

@@ -124,9 +124,8 @@ def status_payload(memory: MemoryStore | None = None) -> dict[str, Any]:
             "tts": True,
             "stt": has_groq,
             "visao": llm_online,
-            "vtube_studio": False,
             "discord": bool(connections.get("discord")) and has_discord,
-            "omni": bool(connections.get("omni")),
+            "localHands": bool(connections.get("localHands", True)),
         },
     }
 

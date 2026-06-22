@@ -198,12 +198,12 @@ def test_voice_runtime_processes_mocked_turn_and_tts(tmp_path) -> None:
         def stop(self) -> None:
             played.append(b"stop")
 
-    async def _fake_text_runner(payload, *, core, memory):
+    async def _fake_text_runner(payload, *, core, memory, on_delta=None, on_activity=None):
         assert payload["text"] == "oi hana"
         assert payload.get("channel") == "voice"
         return {
             "ok": True,
-            "text": "Oi, Nakamura.",
+            "text": "Oi, Operador.",
             "meta": {"provider": payload["provider"], "model": payload["model"]},
             "status": {"stage": "success"},
         }

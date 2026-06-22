@@ -79,7 +79,7 @@ def test_multi_character_request_loads_aliases_and_references(tmp_path: Path) ->
         folder.mkdir()
         (folder / "base.png").write_bytes(b"fake")
     (hana_dir / "character.json").write_text(
-        '{"display_name":"Hana AM Nakamura","identity_prompt":"hana identity","negative_prompt":"bad hana","default_references":["base"],"reference_images":{"base":"base.png"}}',
+        '{"display_name":"Hana AM Operador","identity_prompt":"hana identity","negative_prompt":"bad hana","default_references":["base"],"reference_images":{"base":"base.png"}}',
         encoding="utf-8",
     )
     (nyra_dir / "character.json").write_text(
@@ -97,7 +97,7 @@ def test_multi_character_request_loads_aliases_and_references(tmp_path: Path) ->
     )
 
     assert request.character_ids == ("hana", "nyra", "shogun")
-    assert [profile.display_name for profile in request.profiles] == ["Hana AM Nakamura", "Nyra", "Shogun"]
+    assert [profile.display_name for profile in request.profiles] == ["Hana AM Operador", "Nyra", "Shogun"]
     refs = resolve_request_reference_paths(request)
     assert len(refs) == 3
     assert all(Path(path).name == "base.png" for path in refs)
@@ -110,16 +110,16 @@ def test_missing_character_json_returns_clear_error(tmp_path: Path) -> None:
     (tmp_path / "nakamura").mkdir()
 
     try:
-        parse_character_image_request({"character": "nakamura", "prompt": "Nakamura portrait"}, root_dir=str(tmp_path))
+        parse_character_image_request({"character": "nakamura", "prompt": "Operador portrait"}, root_dir=str(tmp_path))
     except FileNotFoundError as exc:
         assert "Personagem visual nao cadastrado: nakamura" in str(exc)
     else:
-        raise AssertionError("Expected missing Nakamura character.json to fail clearly")
+        raise AssertionError("Expected missing Operador character.json to fail clearly")
 
 
 def test_infer_image_operation_detects_generation_and_edit() -> None:
     assert infer_image_operation("gere uma imagem da Hana em um laboratorio cyberpunk", []) == "character_generate"
-    assert infer_image_operation("queria uma imagem da Nyra tomando cafe", []) == "character_generate"
+    assert infer_image_operation("queria uma imagem da Hana tomando cafe", []) == "character_generate"
     assert infer_image_operation("crie uma imagem de uma cidade neon", []) == "generate"
     assert infer_image_operation("mude o fundo dessa foto", [{"type": "image/png", "path": "x"}]) == "edit"
     assert infer_image_operation("edita essa imagem com luz neon", []) == "edit"
@@ -177,18 +177,18 @@ def test_image_service_accepts_raw_multi_character_xml_payload(monkeypatch, tmp_
     monkeypatch.setattr(HanaImageGen, "generate_character", _fake_generate_character)
     service = ImageGenerationService(memory=memory, output_dir=str(tmp_path))
 
-    result = service.generate_character('{"characters":["hana","nyra"],"prompt":"Hana and Nyra drinking coffee together."}')
+    result = service.generate_character('{"characters":["hana","nova"],"prompt":"Hana and Nova drinking coffee together."}')
 
     assert result.ok is True
     assert captured["payload"] == {
-        "characters": ["hana", "nyra"],
-        "prompt": "Hana and Nyra drinking coffee together.",
+        "characters": ["hana", "nova"],
+        "prompt": "Hana and Nova drinking coffee together.",
         "mode": "scene",
     }
     last = memory.get_setting(LAST_IMAGE_GENERATION_KEY, {})
-    assert last["character_ids"] == ["hana", "nyra"]
-    assert last["character_id"] == "hana, nyra"
-    assert "Identity rules for Nyra" in last["final_prompt"]
+    assert last["character_ids"] == ["hana", "nova"]
+    assert last["character_id"] == "hana, nova"
+    assert "Identity rules for Nova" in last["final_prompt"]
 
 
 def test_prompt_lookup_returns_last_image_prompt_without_generation(tmp_path: Path) -> None:

@@ -21,7 +21,7 @@ class GroqProvider(OpenRouterProvider):
     default_model = "llama-3.3-70b-versatile"
     chat_completions_url = GROQ_CHAT_COMPLETIONS_URL
     http_timeout_seconds = 120
-    tool_rounds = 3
+    tool_rounds = 20
     supports_plugins = False
     provider_status_title = "GROQ PROVIDER STATUS"
 
@@ -85,21 +85,59 @@ class GroqProvider(OpenRouterProvider):
             create_kwargs["tools"] = payload.get("tools")
             create_kwargs["tool_choice"] = payload.get("tool_choice", "auto")
 
+        # Reasoning models (qwen3, gpt-oss, deepseek-r1) otherwise dump their raw
+        # chain-of-thought into `content` — which then gets spoken by TTS as English
+        # "The user wants me to...". Ask Groq to PARSE reasoning into a separate field
+        # so `content` is the clean final answer. Only sent for reasoning families;
+        # other models reject the param.
+        model_id = str(payload.get("model") or "").lower()
+        is_reasoning = any(tag in model_id for tag in ("qwen3", "qwen/qwen3", "gpt-oss", "deepseek-r1", "-r1"))
+        if is_reasoning:
+            create_kwargs["reasoning_format"] = "parsed"
+
+        # Latency: a reasoning model bills its hidden chain-of-thought as completion
+        # tokens. On VOICE/TERMINAL we want a fast, short reply — thinking ~2000 tokens
+        # to say "bom dia" is pure latency with no upside. So disable thinking on those
+        # channels (`reasoning_effort=none`) while CHAT keeps full reasoning for depth.
+        # `_channel` is an internal hint stripped before any HTTP call (never sent).
+        channel = str(payload.get("_channel") or "").strip().lower()
+        low_latency_channel = channel in {"voice", "terminal_agent"}
+        # The "thinker" GUI toggle drives reasoning depth:
+        #   toggle OFF -> never think (reasoning_effort=none), everywhere.
+        #   toggle ON  -> chat thinks fully; voice/terminal think a LITTLE ("low") so
+        #                 they stay fast but can still reason about time/logic instead
+        #                 of blurting. Default True = thinks.
+        thinking_enabled = bool(payload.get("_thinking", True))
+        if is_reasoning:
+            if not thinking_enabled:
+                create_kwargs["reasoning_effort"] = "none"
+            elif low_latency_channel:
+                create_kwargs["reasoning_effort"] = "low"
+
         # Remove None values
         create_kwargs = {k: v for k, v in create_kwargs.items() if v is not None}
 
         try:
             response = client.chat.completions.create(**create_kwargs)
-            # Convert to dict for compatibility with the rest of the code that expects dict
-            if hasattr(response, "model_dump"):
-                return response.model_dump()
-            elif hasattr(response, "to_dict"):
-                return response.to_dict()
-            else:
-                return dict(response)
         except Exception as exc:
-            # Wrap for consistent error prefix, include original for debug
-            raise RuntimeError(f"groq_sdk_error:{exc}") from exc
+            # Some reasoning families reject reasoning_effort="none" (only qwen3/gpt-oss
+            # accept it). Never let an optimization break a turn: drop it and retry once
+            # before surfacing the error.
+            if "reasoning_effort" in create_kwargs:
+                create_kwargs.pop("reasoning_effort", None)
+                try:
+                    response = client.chat.completions.create(**create_kwargs)
+                except Exception as exc2:
+                    raise RuntimeError(f"groq_sdk_error:{exc2}") from exc2
+            else:
+                raise RuntimeError(f"groq_sdk_error:{exc}") from exc
+        # Convert to dict for compatibility with the rest of the code that expects dict
+        if hasattr(response, "model_dump"):
+            return response.model_dump()
+        elif hasattr(response, "to_dict"):
+            return response.to_dict()
+        else:
+            return dict(response)
 
     def _attachment_parts(self, attachments: list[dict[str, Any]], *, model_info: dict[str, Any] | None) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         """Convert image/text attachments into Groq-compatible content parts."""

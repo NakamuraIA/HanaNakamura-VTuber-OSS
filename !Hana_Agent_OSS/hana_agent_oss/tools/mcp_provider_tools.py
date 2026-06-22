@@ -4,6 +4,7 @@ import re
 from typing import Any, Callable
 
 from hana_agent_oss.mcp.client import run_async
+from hana_agent_oss.mcp.config import McpConfigStore
 from hana_agent_oss.mcp.contracts import McpCallRequest
 from hana_agent_oss.mcp.manager import McpManager
 
@@ -117,6 +118,28 @@ def mcp_invoke_call(
     normalized_server = str(server_id or "").strip()
     normalized_tool = str(tool or "").strip()
     normalized_args = arguments if isinstance(arguments, dict) else {}
+
+    # Server inference: weak models routinely omit server_id or guess it wrong
+    # (e.g. "tavily_mcp_research" instead of "tavily"), which used to hard-fail the
+    # whole turn. If the given server_id is missing or unknown, find the enabled
+    # server whose allowlist contains this tool (dash/underscore tolerant).
+    def _norm(name: str) -> str:
+        return str(name or "").strip().lower().replace("-", "_")
+
+    if normalized_tool:
+        try:
+            servers = McpConfigStore().list_servers()
+            known_ids = {s.id for s in servers}
+            if not normalized_server or normalized_server not in known_ids:
+                tool_n = _norm(normalized_tool)
+                match = next(
+                    (s.id for s in servers if s.enabled and tool_n in {_norm(t) for t in s.allowed_tools}),
+                    "",
+                )
+                if match:
+                    normalized_server = match
+        except Exception:
+            pass
     append_mcp_terminal_event(
         memory,
         kind="tool_call",
@@ -184,10 +207,14 @@ def mcp_openai_schemas() -> list[dict[str, Any]]:
             "type": "function",
             "function": {
                 "name": "mcp_invoke",
-                "description": "Invoke one allowlisted tool on one enabled MCP server.",
+                "description": (
+                    "Invoke one allowlisted tool on an enabled MCP server. "
+                    "Pass 'tool' (e.g. tavily_search) and 'arguments'. 'server_id' is "
+                    "optional: if omitted, the backend finds the server that owns the tool."
+                ),
                 "parameters": {
                     "type": "object",
-                    "required": ["server_id", "tool"],
+                    "required": ["tool"],
                     "properties": {
                         "server_id": {"type": "string"},
                         "tool": {"type": "string"},
@@ -227,14 +254,14 @@ def mcp_tool_instruction(*, enabled: bool) -> str:
         return (
             "\n\n[MCP TOOL STATUS]\n"
             "MCP provider tools are not available in this turn. Do not write mcp_discover(...) or mcp_invoke(...) as visible text.\n"
-            "If Nakamura asks for Tavily/MCP, explain that a tools-capable model/provider is required.\n"
+            "If Operador asks for Tavily/MCP, explain that a tools-capable model/provider is required.\n"
         )
     return (
         "\n\n[MCP TOOL MANUAL]\n"
         "Use mcp_discover to inspect enabled MCP servers and available tools when needed.\n"
         "Use mcp_invoke only for tools that are enabled and allowlisted by the backend.\n"
         "Use Tavily MCP for current web research, sources, recent facts, news, and external verification.\n"
-        "Do not use MCP for normal chat, TTS, STT, image generation, Omni, or local PC automation.\n"
+        "Do not use MCP for normal chat, TTS, STT, image generation, or local PC automation (use the terminal tools for that).\n"
         "Never write mcp_discover(...) or mcp_invoke(...) as visible text; use actual tool calls only.\n"
         "If a tool returns ok=false, quote the returned error exactly and do not invent causes.\n"
     )

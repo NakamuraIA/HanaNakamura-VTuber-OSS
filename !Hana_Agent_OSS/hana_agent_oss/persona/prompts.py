@@ -7,7 +7,11 @@ from pathlib import Path
 from hana_agent_oss.persona.profile import PersonaProfile, default_persona_profile
 
 
-from hana_agent_oss.paths import SKILLS_DIR as DEFAULT_SKILLS_DIR, EXT_SKILLS_DIR as HANA_AGENT_SKILLS_DIR
+from hana_agent_oss.paths import (
+    SKILLS_DIR as DEFAULT_SKILLS_DIR,
+    EXT_SKILLS_DIR as HANA_AGENT_SKILLS_DIR,
+    SCRIPTS_DIR,
+)
 
 
 def load_provider_skills(skills_dir: str | os.PathLike[str] | None = None) -> str:
@@ -30,7 +34,10 @@ def load_provider_skills(skills_dir: str | os.PathLike[str] | None = None) -> st
     if not roots:
         return ""
 
-    blocks: list[str] = []
+    # Lazy skills: inject only an INDEX (name + one-line title), not the full body.
+    # The full manual is read on demand via the skill.read tool. This keeps the
+    # system prompt flat as skills grow (each new skill no longer taxes every turn).
+    index_lines: list[str] = []
     for root in roots:
         is_ext = root == HANA_AGENT_SKILLS_DIR
         for path in sorted(root.glob("*.md")):
@@ -40,15 +47,39 @@ def load_provider_skills(skills_dir: str | os.PathLike[str] | None = None) -> st
                 continue
             if not content:
                 continue
+            # First non-empty line as the title (strip leading markdown '#').
+            title = ""
+            for line in content.splitlines():
+                line = line.strip().lstrip("#").strip()
+                if line:
+                    title = line
+                    break
+            name = path.stem
+            tag = " (ext)" if is_ext else ""
+            index_lines.append(f"- {name}{tag}: {title[:120]}" if title else f"- {name}{tag}")
 
-            if is_ext:
-                blocks.append(f"--- Skill (ext): {path.name} ---\n{content}")
-            else:
-                blocks.append(f"--- Skill: {path.name} ---\n{content}")
-
-    if not blocks:
-        return ""
-    return "Habilidades operacionais carregadas:\n" + "\n\n".join(blocks)
+    location = (
+        "[SUAS SKILLS E SCRIPTS]\n"
+        f"Skills (manuais .md) ficam SOMENTE em: {DEFAULT_SKILLS_DIR}\n"
+        f"Scripts (codigo executavel) ficam SOMENTE em: {SCRIPTS_DIR}\n"
+        "Skill = o manual (quando/como fazer, pegadinhas). Script = o codigo que "
+        "realmente executa. Quando uma tarefa envolve codigo reutilizavel (baixar, "
+        "converter, automatizar), crie um SCRIPT com a ferramenta script.create e rode "
+        "com terminal.run (ex.: 'python data/scripts/<nome>.py'), em vez de remontar o "
+        "comando toda vez. A SKILL correspondente deve APONTAR para esse script. "
+        "Para criar skill use skill.create; para criar script use script.create — ambas "
+        "gravam na pasta certa sozinhas. NUNCA crie skill ou script com file.write num "
+        "caminho adivinhado: outras pastas '.agent/skills' ou de scripts no PC pertencem "
+        "a OUTROS bots, nao a voce. Para anotar dicas numa skill existente use skill.note."
+    )
+    if not index_lines:
+        return location
+    return (
+        location
+        + "\n\nSKILLS DISPONIVEIS (so o indice; leia a completa com a tool skill.read "
+        "ANTES de executar a tarefa correspondente):\n"
+        + "\n".join(index_lines)
+    )
 
 
 def render_persona_context(profile: PersonaProfile | None = None) -> str:
@@ -100,17 +131,37 @@ def build_provider_system_prompt(
             "nao use busca nativa Gemini, Code Execution Gemini, URL Context Gemini ou ferramentas server-side do Gemini; "
             "use XML de imagem normalmente quando a Hana tiver provider de imagem ativo; "
             "modelos Compound da Groq podem usar recursos nativos da Groq quando o proprio modelo suportar; "
-            "use tools locais como Omni ou MCP somente quando elas forem realmente fornecidas no turno."
+            "use tools locais (terminal/arquivos) ou MCP somente quando elas forem realmente fornecidas no turno."
         ),
 
     }
     sections = [
         render_persona_context(profile),
+        _output_rules(),
         _temporal_context(),
         load_provider_skills(),
         provider_rules.get(provider, "Regras do provedor: siga o contrato do runtime e responda somente com capacidades disponiveis."),
     ]
     return "\n\n".join(section.strip() for section in sections if section.strip())
+
+
+def _output_rules() -> str:
+    """Hard output guardrails for reasoning models (anti CoT-leak + language lock).
+
+    Reasoning models (qwen3, gpt-oss) tend to dump their raw chain-of-thought in
+    English ("The user wants me to...") as the answer. The backend already requests
+    reasoning_format=parsed on Groq, but this is the prompt-level belt-and-suspenders.
+    """
+    return (
+        "[REGRA DE SAIDA - OBRIGATORIA]\n"
+        "Responda SEMPRE em portugues do Brasil (pt-BR), nunca em ingles, salvo se a "
+        "Operador pedir explicitamente outro idioma.\n"
+        "NUNCA mostre seu raciocinio interno, analise passo-a-passo, 'Thinking Process', "
+        "'The user wants', planejamento de qual ferramenta usar, ou monologo de decisao. "
+        "Isso fica no seu pensamento, NAO na resposta. Entregue SOMENTE a resposta final, "
+        "curta e direta, ja decidida. Se precisar usar ferramenta, chame a ferramenta — "
+        "nao narre o que voce esta pensando em fazer."
+    )
 
 
 def _temporal_context() -> str:
@@ -120,10 +171,21 @@ def _temporal_context() -> str:
     time (AI models, prices, versions, news, dates), it must use the web search tool
     instead of guessing from memory.
     """
-    today = datetime.now().strftime("%d/%m/%Y")
+    agora = datetime.now()
+    dias = ("segunda-feira", "terca-feira", "quarta-feira", "quinta-feira", "sexta-feira", "sabado", "domingo")
+    dia_semana = dias[agora.weekday()]
+    today = agora.strftime("%d/%m/%Y")
+    hora = agora.strftime("%H:%M")
     return (
         "[CONTEXTO TEMPORAL]\n"
-        f"Hoje e {today}. Seu conhecimento de treinamento esta defasado (vai ate ~2024). "
+        f"AGORA, NESTE EXATO MOMENTO, sao {hora} de {dia_semana}, {today} (horario local do PC da Operador). "
+        "Voce SEMPRE recebe a data e a hora atuais aqui em todo turno — entao NUNCA rode "
+        "comando no terminal (Get-Date, time /t) so pra saber a hora, e NUNCA chute: use este valor. "
+        f"RACIOCINIO TEMPORAL: para decidir se um evento JA aconteceu, ainda vai acontecer ou esta "
+        f"acontecendo, COMPARE o horario do evento com {hora} de hoje. Se o evento e mais tarde que "
+        f"{hora}, ele AINDA NAO aconteceu — nao diga que 'ja acabou'. Nunca assuma passado/futuro sem "
+        "comparar com a hora atual acima. "
+        f"Seu conhecimento de treinamento esta defasado (vai ate ~2024). "
         "NUNCA responda fatos que mudam com o tempo (modelos de IA, precos, versoes, "
         "lancamentos, noticias, datas, 'atual/recente/hoje') a partir da memoria de "
         "treinamento: use a ferramenta de pesquisa web (Tavily via mcp_invoke) ANTES de "
@@ -135,7 +197,7 @@ def build_stt_prompt(profile: PersonaProfile | None = None, *, group_call: bool 
     """Build the transcription bias prompt used by STT providers.
 
     When group_call=True (virtual cable in Discord call with multiple people),
-    the prompt avoids assuming the speaker is always the main user (Nakamura).
+    the prompt avoids assuming the speaker is always the main user (Operador).
     This prevents the model from hallucinating the wrong speaker and improves
     transcription of other voices in the call.
     """

@@ -5,6 +5,7 @@ import { AgentJobsApi } from "../api/agentJobs";
 import { McpApi } from "../api/mcp";
 import { MemoryApi } from "../api/memory";
 import { TerminalAgentApi } from "../api/terminalAgent";
+import { RemindersApi } from "../api/reminders";
 
 export const ApiController = {
   ...ChatApi,
@@ -14,4 +15,5 @@ export const ApiController = {
   ...McpApi,
   ...MemoryApi,
   ...TerminalAgentApi,
+  ...RemindersApi,
 };

@@ -27,7 +27,7 @@ registries.
 - `vtuber.interface`
 - `web_search.integration`
 - `mcp.provider`
-- `omni.bridge`
+- `terminal.module`
 
 ## Channels
 
@@ -61,50 +61,36 @@ The current planner is deterministic and supports:
 - file commands;
 - memory commands;
 - `mcp.discover` and `mcp.invoke`;
-- `omni.delegate` and `omni.supervise` as background jobs through the local
-  Omni-Agent OS HTTP bridge at `http://127.0.0.1:8060`;
-- `agent.job.cancel` for explicit user-requested cancellation of active
-  Omni jobs;
+- `terminal.run` for local commands/scripts through Hana's in-process hands;
 - contextual file references such as `abre ele` and `continua nele`.
 
 The deterministic planner is only used when a caller explicitly selects the
 Agent Core provider/mode. Normal chat and voice turns are not routed by matching
-Nakamura's text or speech against command prefixes. In normal Gemini-backed
+Operador's text or speech against command prefixes. In normal Gemini-backed
 conversation, Hana decides tool use through provider tool-calling or assistant
 output protocols; user text itself must not be treated as an action trigger.
 
 Provider-backed LLM planning is still a future provider. MCP execution is wired
 through the same tool/capability contract as a client provider.
 
-## Gemini Provider Tools
+## Provider Tools
 
-The Gemini API provider exposes the supervised Omni bridge as the callable
-function `omni_supervise`. Hana should use it only for local computer,
-process, file-system, window, clipboard, OCR, or PC automation tasks. Normal
-chat, STT, TTS, image generation and web search stay outside this bridge.
+Local PC actions use Hana's in-process "hands": `terminal_run` (run a shell
+command with timeout + output cap; `shell` can be `cmd`, `powershell` or `bash`)
+and `terminal_inspect_dir` (list a folder). They are exposed to tool-capable
+OpenRouter models (gated by the `localHands` toggle in Conexoes) and run
+directly in the backend — there is no separate executor service.
 
-The callable is only exposed when the Connections config enables `omni`. The
-endpoint is stored as `omniUrl`, defaults to `http://127.0.0.1:8060`, and can
-be checked through `/api/config/omni/status`.
+Safety is enforced by the persona rules: before destructive/irreversible actions
+(delete, format, admin, credentials/.env) Hana must investigate, show what she
+will do and confirm with the user. When a tool returns `ok=false`, the model
+must show the returned `error` instead of guessing a cause.
 
-The Gemini callable keeps its schema intentionally simple: `acceptance` is a
-plain string checklist instead of an array, because Gemini rejects array
-parameters when the SDK-generated schema omits `items`.
-Its exposed `mode` values are `inspect`, `execute` and `review`; the bridge
-keeps `repair` only as a backward-compatible alias that normalizes to `review`.
+The Gemini API provider exposes MCP callables (`mcp_discover`, `mcp_invoke`) when
+configured. When server-side Gemini tools (e.g. Google Search) are enabled, the
+provider sends `tool_config.functionCallingConfig` with
+`includeServerSideToolInvocations=true`.
 
-When Omni is exposed as a Gemini callable, the provider must also send
-`tool_config.functionCallingConfig` in `AUTO` mode. When Google Search or
-another server-side Gemini tool is enabled, the same config must set
-`includeServerSideToolInvocations=true`. If the installed Google SDK cannot
-build that config, the provider drops only the Omni callable and keeps normal
-Gemini chat/search online.
-
-Gemini-triggered Omni calls are mirrored into the Terminal Agent log as
-`omni.supervise` job events. The callable returns quickly with `job_id` and
-`completion_status=running`; that only means the background job started. The
-Terminal Agent receives the final report later as `job.done`, `job.failed` or
-`job.cancelled`.
-When the callable returns `ok=false`, the model must show the returned `error`
-field instead of guessing a cause.
+Tool activity is mirrored into the Terminal Agent log as `tool_call` /
+`tool_result` events.
 

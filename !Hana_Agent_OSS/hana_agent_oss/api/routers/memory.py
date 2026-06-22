@@ -201,3 +201,32 @@ async def run_memory_maintenance(request: Request, payload: dict[str, Any] | Non
 @router.post("/api/memory/clear-runtime")
 async def clear_memory(request: Request) -> dict[str, Any]:
     return request.app.state.memory.clear_runtime()
+
+
+@router.post("/api/memory/sleep/run")
+async def run_sleep(request: Request, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Run the sleep cycle now (episodic diary + maintenance). force=true ignores the 24h gate."""
+    import asyncio
+
+    from hana_agent_oss.memory.sleep import run_sleep_cycle
+
+    body = _payload_dict(payload)
+    force = bool(body.get("force", False))
+    memory = request.app.state.memory
+    # A chamada ao LLM é bloqueante; roda no executor para não travar o event loop.
+    result = await asyncio.get_running_loop().run_in_executor(None, lambda: run_sleep_cycle(memory, force=force))
+    return {"status": "ok" if result.get("ok") else "error", **result}
+
+
+@router.get("/api/memory/sleep/status")
+async def sleep_status(request: Request) -> dict[str, Any]:
+    from hana_agent_oss.memory.sleep import SLEEP_SETTING_KEY, latest_episode
+
+    memory = request.app.state.memory
+    state = memory.get_setting(SLEEP_SETTING_KEY, {}) or {}
+    episode = latest_episode(memory)
+    return {
+        "status": "ok",
+        "lastRunAt": state.get("lastRunAt"),
+        "lastEpisode": {"id": episode.get("id"), "text": episode.get("text"), "createdAt": episode.get("created_at")} if episode else None,
+    }

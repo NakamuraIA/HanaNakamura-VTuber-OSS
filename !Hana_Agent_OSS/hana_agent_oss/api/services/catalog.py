@@ -9,6 +9,7 @@ from hana_agent_oss.modules.voice.tts_elevenlabs import (
     DEFAULT_ELEVENLABS_VOICE,
     ELEVENLABS_TTS_MODELS,
 )
+from hana_agent_oss.providers.provider_selector.deepseek.catalog import get_deepseek_catalog
 from hana_agent_oss.providers.provider_selector.groq.catalog import GROQ_STATIC_MODELS, get_groq_catalog
 from hana_agent_oss.providers.provider_selector.openrouter.catalog import get_openrouter_catalog
 
@@ -16,8 +17,14 @@ from hana_agent_oss.providers.provider_selector.openrouter.catalog import get_op
 DEFAULT_LLM_CONFIG: dict[str, Any] = {
     "llmProvider": "gemini_api",
     "llmModel": "gemini-3.1-pro-preview",
+    "agentProvider": "",
+    "agentModel": "",
+    "agentToolRounds": 40,
     "llmFilter": "",
     "llmTemperature": 0.85,
+    # Groq "pensar antes de falar": True = modelos de raciocínio (qwen3/gpt-oss) pensam
+    # antes de responder; False = resposta direta e rápida (reasoning_effort=none).
+    "groqThinking": True,
     "openrouterRoutingByModel": {},
     "visionModel": "gemini-3-flash-preview",
     "ttsProvider": "edge",
@@ -36,11 +43,14 @@ DEFAULT_LLM_CONFIG: dict[str, Any] = {
     "ttsSpeed": 1.0,
     "ttsPitch": 0.0,
     "ttsVolume": 1.0,
-    "ttsStreaming": False,
+    "ttsStreaming": True,  # fala frase-a-frase enquanto o modelo gera (corta o tempo até o 1º áudio)
     "ttsStability": 0.5,
     "ttsSimilarity": 0.75,
     "ttsStyle": 0.0,
     "ttsSpeakerBoost": True,
+    # Last-used voice/controls per TTS provider, so switching providers and coming
+    # back restores the custom voice instead of resetting to the hardcoded default.
+    "ttsByProvider": {},
 }
 
 DEFAULT_CHAT_CONFIG: dict[str, Any] = {
@@ -73,12 +83,23 @@ DEFAULT_VOICE_CONFIG: dict[str, Any] = {
     "ttsSimilarity": 0.75,
     "ttsStyle": 0.0,
     "ttsSpeakerBoost": True,
+    "ttsMaxChars": 350,
     "inputDeviceId": "",
     "inputDeviceLabel": "",
     "inputDeviceSource": "sounddevice",
+    # Segunda saída de áudio (espelho): além do alto-falante do PC, manda a voz da Hana
+    # para um device extra (ex.: CABLE Input do VB-Audio Virtual Cable) para rotear no
+    # Discord/VTube. Liga/desliga sob demanda; quando off, nada muda.
+    "secondOutputEnabled": False,
+    "secondOutputDeviceId": "",
+    "secondOutputDeviceLabel": "",
     "vadThreshold": 0.035,
+    "vadMode": "silero",
+    "vadProbThreshold": 0.5,
+    "bargeInEnabled": False,
     "silenceTimeoutMs": 900,
     "speakTerminalEvents": True,
+    "callMode": False,
 }
 
 DEFAULT_CONNECTIONS: dict[str, Any] = {
@@ -89,18 +110,14 @@ DEFAULT_CONNECTIONS: dict[str, Any] = {
     "pttKey": "F2",
     "stopHotkey": True,
     "stopKey": "F4",
-    "vts": False,
     "discord": False,
-    "discordSpeak": False,
-    "discordListen": False,
-    "omni": False,
-    "omniUrl": "http://127.0.0.1:8060",
+    "localHands": True,
     "visao": False,
 }
 
 # Catalogo unificado dos providers LLM/STT/TTS.
 MODEL_CATALOG: dict[str, Any] = {
-    "llmProviders": ["gemini_api", "openrouter", "groq"],
+    "llmProviders": ["gemini_api", "openrouter", "groq", "deepseek"],
     "imageProviders": ["gemini_api", "openrouter"],
     "models": [
         {
@@ -187,6 +204,10 @@ MODEL_CATALOG: dict[str, Any] = {
         {"id": "pt-BR-FranciscaNeural", "label": "Edge Francisca", "provider": "edge"},
         {"id": "pt-BR-AntonioNeural", "label": "Edge Antonio", "provider": "edge"},
         {"id": "pt-BR-ThalitaNeural", "label": "Edge Thalita", "provider": "edge"},
+        {"id": "ja-JP-NanamiNeural", "label": "Edge Nanami (ja-JP - sotaque japones)", "provider": "edge"},
+        {"id": "ja-JP-AoiNeural", "label": "Edge Aoi (ja-JP - sotaque japones)", "provider": "edge"},
+        {"id": "ja-JP-MayuNeural", "label": "Edge Mayu (ja-JP - sotaque japones)", "provider": "edge"},
+        {"id": "ja-JP-ShioriNeural", "label": "Edge Shiori (ja-JP - sotaque japones)", "provider": "edge"},
         {"id": "pt-BR-Neural2-C", "label": "Google Cloud Neural2 C", "provider": "google_cloud_tts"},
         {"id": "pt-BR-Neural2-A", "label": "Google Cloud Neural2 A", "provider": "google_cloud_tts"},
         {"id": "pt-BR-Wavenet-A", "label": "Google Cloud Wavenet A", "provider": "google_cloud_tts"},
@@ -289,6 +310,10 @@ VOICE_PROVIDER_CATALOG: dict[str, Any] = {
                 {"id": "pt-BR-ThalitaNeural", "label": "Thalita Neural", "locale": "pt-BR"},
                 {"id": "pt-PT-RaquelNeural", "label": "Raquel Neural", "locale": "pt-PT"},
                 {"id": "pt-PT-DuarteNeural", "label": "Duarte Neural", "locale": "pt-PT"},
+                {"id": "ja-JP-NanamiNeural", "label": "Nanami (sotaque japones)", "locale": "ja-JP"},
+                {"id": "ja-JP-AoiNeural", "label": "Aoi (sotaque japones)", "locale": "ja-JP"},
+                {"id": "ja-JP-MayuNeural", "label": "Mayu (sotaque japones)", "locale": "ja-JP"},
+                {"id": "ja-JP-ShioriNeural", "label": "Shiori (sotaque japones)", "locale": "ja-JP"},
             ],
             "defaultVoice": "pt-BR-FranciscaNeural",
             "supportsRate": True,
@@ -468,6 +493,9 @@ def normalize_catalog_provider(provider: Any) -> str:
         "groqcloud": "groq",
         "glock": "groq",
         "groq": "groq",
+        "deepseek": "deepseek",
+        "deepseek_official": "deepseek",
+        "deep_seek": "deepseek",
     }
     normalized = aliases.get(raw, raw or "").strip().lower()
     if not normalized:
@@ -528,6 +556,7 @@ def catalog_payload(memory: MemoryStore) -> dict[str, Any]:
     }
     openrouter_models, openrouter_error = get_openrouter_catalog()
     groq_models, groq_error = get_groq_catalog()
+    deepseek_models, deepseek_error = get_deepseek_catalog()
     data["models"].extend(openrouter_models)
     data["models"] = [
         model
@@ -535,6 +564,7 @@ def catalog_payload(memory: MemoryStore) -> dict[str, Any]:
         if not (isinstance(model, dict) and model.get("provider") == "groq")
     ]
     data["models"].extend(groq_models)
+    data["models"].extend(deepseek_models)
     # Collect image-capable models from OpenRouter for the image provider selector.
     image_models = [
         model for model in openrouter_models
@@ -552,6 +582,11 @@ def catalog_payload(memory: MemoryStore) -> dict[str, Any]:
             "ok": groq_error is None,
             "error": groq_error,
             "modelCount": len(groq_models),
+        },
+        "deepseek": {
+            "ok": deepseek_error is None,
+            "error": deepseek_error,
+            "modelCount": len(deepseek_models),
         }
     }
     data["voiceProviders"] = VOICE_PROVIDER_CATALOG

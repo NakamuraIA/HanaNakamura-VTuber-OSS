@@ -25,7 +25,10 @@ from hana_agent_oss.mcp.manager import McpManager
 from hana_agent_oss.mcp.tools import register_mcp_tools
 from hana_agent_oss.tools.file_tools import register_file_tools
 from hana_agent_oss.tools.memory_tools import register_memory_tools
-from hana_agent_oss.tools.omni_tools import DEFAULT_OMNI_BASE_URL, register_omni_tools
+from hana_agent_oss.tools.reminder_tools import register_reminder_tools
+from hana_agent_oss.tools.skill_tools import register_skill_tools
+from hana_agent_oss.tools.script_tools import register_script_tools
+from hana_agent_oss.tools.terminal_tools import register_terminal_tools
 
 
 class HanaAgentCore:
@@ -96,23 +99,13 @@ class HanaAgentCore:
                 permissions={"risk": "medium", "requires_user_enable": False},
             )
         )
-        self.capabilities.register(
-            CapabilityManifest(
-                id="omni.bridge",
-                name="Omni Bridge",
-                type="adapter",
-                version="0.1.0",
-                description="HTTP bridge to the local Omni-Agent OS executor.",
-                capabilities=["omni.delegate", "omni.supervise"],
-                entrypoint={"kind": "http", "url": f"{DEFAULT_OMNI_BASE_URL}/api/command"},
-                permissions={"risk": "medium", "requires_user_enable": False},
-                transport="http",
-            )
-        )
         register_file_tools(self.tools)
         register_memory_tools(self.tools)
+        register_skill_tools(self.tools)
+        register_script_tools(self.tools)
+        register_terminal_tools(self.tools)
+        register_reminder_tools(self.tools)
         register_mcp_tools(self.tools, self.mcp)
-        register_omni_tools(self.tools)
 
     def run(
         self,
@@ -298,15 +291,6 @@ class HanaAgentCore:
             if call.tool == "memory.audit":
                 return f"Auditoria de memoria: {result.output.get('audit')}"
             return f"{call.tool} retornou: {result.output}"
-        if call.tool in {"omni.delegate", "omni.supervise"}:
-            status = str(result.output.get("status") or "unknown")
-            completion_status = str(result.output.get("completion_status") or "needs_review")
-            round_count = result.output.get("round_count")
-            response = str(result.output.get("response") or "").strip()
-            if len(response) > 4000:
-                response = response[:4000].rstrip() + "\n\n[resposta do Omni truncada]"
-            rounds = f" em {round_count} rodada(s)" if round_count else ""
-            return f"Omni retornou ({status}, {completion_status}){rounds}:\n{response}"
         if call.tool in {"file.write", "file.append"}:
             return f"{call.tool} executed and verified."
         return f"{call.tool} executed."
