@@ -12,7 +12,10 @@ Available tool flow:
 Rules:
 
 - Never write `mcp_discover(...)` or `mcp_invoke(...)` as visible text; use the real tool call.
-- Never use Tavily for normal chat, persona talk, TTS, STT, image generation, Omni, local files, or PC automation.
+- Never use Tavily for normal chat, persona talk, TTS, STT, image generation, local files, or PC automation (use the terminal tools for that).
 - Never trigger Tavily only because the user mentioned a word. The model decides from the actual request intent.
 - If the MCP tool returns `ok=false`, show the real error exactly and do not invent another cause.
 - If Tavily is disabled, missing `TAVILY_API_KEY`, or the tool is not allowlisted, explain the returned backend error and what must be enabled.
+
+## Notas da Hana (aprendidas em uso)
+- [2026-06-08] usar search_depth advanced pra notícias

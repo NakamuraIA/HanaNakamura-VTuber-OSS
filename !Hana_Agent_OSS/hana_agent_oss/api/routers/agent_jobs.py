@@ -20,7 +20,7 @@ def _manager(request: Request) -> AgentJobManager:
 
 @router.get("/api/agent-jobs")
 async def list_agent_jobs(request: Request) -> dict[str, Any]:
-    """List active Omni jobs plus retained final history."""
+    """List active background agent jobs plus retained final history."""
     jobs = _manager(request).list_jobs()
     return {
         "ok": True,
@@ -40,7 +40,7 @@ async def get_agent_job(request: Request, job_id: str) -> dict[str, Any]:
 
 @router.post("/api/agent-jobs/{job_id}/cancel")
 async def cancel_agent_job(request: Request, job_id: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Request cancellation for one active Omni job."""
+    """Request cancellation for one active background job."""
     reason = str((payload or {}).get("reason") or "control_panel").strip() or "control_panel"
     return _manager(request).cancel_job(job_id, reason=reason)
 

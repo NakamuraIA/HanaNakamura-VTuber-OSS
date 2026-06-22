@@ -15,9 +15,7 @@ from hana_agent_oss.modules.vision.image_gen import DEFAULT_IMAGE_MODEL, HanaIma
 from hana_agent_oss.modules.vision.image_service import media_item_for_path
 from hana_agent_oss.persona import build_provider_system_prompt
 from hana_agent_oss.providers.contracts import ProviderRequest, ProviderResponse
-from hana_agent_oss.api.services.agent_jobs import agent_job_cancel as run_agent_job_cancel, get_agent_job_manager
 from hana_agent_oss.tools.mcp_provider_tools import mcp_discover_call, mcp_invoke_call, mcp_tool_instruction
-from hana_agent_oss.tools.omni_tools import omni_supervise as run_omni_supervise
 
 INLINE_ATTACHMENT_LIMIT_BYTES = 19 * 1024 * 1024
 FILE_PROCESSING_TIMEOUT_SECONDS = 60
@@ -64,12 +62,6 @@ class GeminiApiProvider:
         native_mode = request.native_search_mode or "auto"
         if native_mode in {"auto", "force"}:
             tools.append(types.Tool(google_search=types.GoogleSearch()))
-        omni_tool = self._omni_supervise_callable(request)
-        if omni_tool is not None:
-            tools.append(omni_tool)
-        cancel_tool = self._agent_job_cancel_callable(request)
-        if cancel_tool is not None:
-            tools.append(cancel_tool)
         mcp_tools = self._mcp_callables(request)
         tools.extend(mcp_tools)
 
@@ -101,12 +93,10 @@ class GeminiApiProvider:
 
         model = (request.model or "").strip() or "gemini-3.1-pro-preview"
         base_system_prompt = build_provider_system_prompt("gemini_api")
-        style_hint = channel_style_hint(request.channel)
+        style_hint = channel_style_hint(request.channel, call_mode=getattr(request, "call_mode", False))
         full_system_instruction = (
             base_system_prompt
             + self._image_tool_instruction()
-            + self._omni_tool_instruction(enabled=omni_tool is not None)
-            + self._agent_jobs_tool_instruction(enabled=cancel_tool is not None)
             + mcp_tool_instruction(enabled=bool(mcp_tools) and model != DEFAULT_IMAGE_MODEL)
             + style_hint
         )
@@ -122,7 +112,7 @@ class GeminiApiProvider:
                 "Você tem acesso à tela atual via captura (screen_capture). Isso acontece especialmente quando está em call de Discord (bot ou cabo virtual) com pessoas assistindo a tela.\n"
                 "Aja de forma totalmente natural, como uma VTuber presente na call (estilo Neuro-sama / Evil Neuro).\n"
                 "NÃO descreva a tela de forma chata ('Estou vendo...', 'Na imagem há...'). Comente de forma integrada, piadas, reações, palpites sobre o que está rolando.\n"
-                "IMPORTANTE: A Nakamura pode estar presente e no comando agora. Quando as falas vierem dela, trate-a como a usuária principal e operadora. Ainda reaja naturalmente ao grupo e à tela."
+                "IMPORTANTE: A Operador pode estar presente e no comando agora. Quando as falas vierem dela, trate-a como a usuária principal e operadora. Ainda reaja naturalmente ao grupo e à tela."
             )
             full_system_instruction += vision_hint
 
@@ -266,7 +256,7 @@ class GeminiApiProvider:
             "Image generation does not use function calling. To request image work, write one silent XML tag at the end of your answer.\n"
             "The backend executes only valid XML image tags. If you do not write a tag, no image will be generated.\n"
             "Never claim that an image was generated, failed, timed out, or had an API error unless the backend result is returned in a later turn/event.\n"
-            "Never use image XML when Nakamura only asks about a previous image, asks which prompt was used, or discusses image generation behavior.\n"
+            "Never use image XML when Operador only asks about a previous image, asks which prompt was used, or discusses image generation behavior.\n"
             "For generic images, use exactly: <gerar_imagem>English prompt for the image</gerar_imagem>.\n"
             "For generic edits, use exactly: <editar_imagem>English edit instruction</editar_imagem>.\n"
             "For Hana, 'you', 'sua', Nyra, Shogun, or registered characters, use exactly <gerar_imagem_personagem>{valid JSON}</gerar_imagem_personagem>.\n"
@@ -274,148 +264,12 @@ class GeminiApiProvider:
             f"Currently registered visual characters: {characters}.\n"
             "Single-character JSON shape: {\"character\":\"hana\",\"mode\":\"scene\",\"prompt\":\"English creative prompt\",\"references\":[],\"preserve_identity\":true}.\n"
             "Multi-character JSON shape: {\"characters\":[\"hana\",\"nyra\"],\"mode\":\"scene\",\"prompt\":\"English creative prompt containing both characters\",\"references\":[],\"preserve_identity\":true}.\n"
-            "When Nakamura asks for two or more registered characters together, use one character XML tag with a characters array, never several separate image tags.\n"
+            "When Operador asks for two or more registered characters together, use one character XML tag with a characters array, never several separate image tags.\n"
             "Use character folder IDs normalized to lowercase, for example hana, nyra, shogun, or nakamura when explicitly requested.\n"
             "If an explicitly requested character is not registered yet, do not replace it with another character; use the requested lowercase ID so the backend can report the missing character.json.\n"
-            "Do not invent image paths. Keep references empty unless Nakamura explicitly names reference keys; empty references use default_references from character.json.\n"
+            "Do not invent image paths. Keep references empty unless Operador explicitly names reference keys; empty references use default_references from character.json.\n"
             "Your visible sentence should say that you are starting/preparing the image, not that it is already ready.\n"
         )
-
-    @staticmethod
-    def _append_omni_terminal_event(memory: Any, *, kind: str, status: str, display_text: str, metadata: dict[str, Any]) -> None:
-        """Mirror Gemini-triggered Omni function calls into Terminal Agent events."""
-        if memory is None:
-            return
-        try:
-            from hana_agent_oss.api.services.terminal_agent import append_terminal_event
-
-            append_terminal_event(
-                memory,
-                {
-                    "kind": kind,
-                    "source": "omni_bridge",
-                    "displayText": display_text,
-                    "speechText": "",
-                    "status": status,
-                    "toolName": "omni.supervise",
-                    "metadata": {"tts": False, **metadata},
-                },
-            )
-        except Exception:
-            return
-
-    @staticmethod
-    def _omni_tool_instruction(*, enabled: bool) -> str:
-        """Build the Omni function-calling guide injected into Gemini system prompts."""
-        if not enabled:
-            return (
-                "\n\n[OMNI LOCAL EXECUTOR STATUS]\n"
-                "The omni_supervise function is not available in this turn. Do not write omni_supervise(...) as visible text.\n"
-                "If Nakamura asks for local PC automation, say the Omni bridge is not enabled/configured instead of pretending to call it.\n"
-            )
-        return (
-            "\n\n[OMNI LOCAL EXECUTOR MANUAL]\n"
-            "For local computer, process, file-system, window, clipboard, OCR, or PC automation tasks that are outside normal conversation, use the function omni_supervise.\n"
-            "This function starts a background job and returns quickly with job_id/status=running. It does not mean Omni finished yet.\n"
-            "Use mode='inspect' for analysis-only requests. Use mode='execute' only when Nakamura explicitly asks to perform a concrete action. Use mode='review' when Nakamura asks Omni to inspect prior work, validate a result, or explain what is wrong.\n"
-            "Pass acceptance as a short plain-text checklist, not as an array.\n"
-            "Never use Omni for normal chat, persona, STT, TTS, image generation, web search, or questions you can answer directly.\n"
-            "If the function result has ok=false, quote the returned error field exactly and do not invent causes such as timeouts, API bugs, or internal crashes.\n"
-            "When the function returns job_id/status=running, tell Nakamura the job started and that the final report will appear in Terminal Agent. Do not summarize a result that has not arrived yet.\n"
-            "For destructive actions, credentials, .env files, commits, deletes, formatting, or irreversible operations, ask Nakamura for confirmation before calling Omni in execute mode.\n"
-        )
-
-    @staticmethod
-    def _agent_jobs_tool_instruction(*, enabled: bool) -> str:
-        """Build the guide for cancelling background jobs through a real tool call."""
-        if not enabled:
-            return ""
-        return (
-            "\n\n[BACKGROUND AGENT JOBS]\n"
-            "Omni runs as cancellable background jobs. If Nakamura explicitly asks to stop, cancel, parar, or abort a running Omni job, call agent_job_cancel.\n"
-            "This is not a hidden trigger: only use the real tool call when the user asks to cancel a background job.\n"
-            "Do not use the TTS stop/hotkey semantics for jobs; job cancellation is separate from stopping speech.\n"
-        )
-
-    def _omni_supervise_callable(self, request: ProviderRequest):
-        """Create the Gemini callable that delegates supervised local tasks to Omni."""
-        connections = {}
-        if request.memory is not None:
-            try:
-                connections = request.memory.get_setting("connections_config", {}) or {}
-            except Exception:
-                connections = {}
-        if not bool(connections.get("omni")):
-            return None
-        omni_url = str(connections.get("omniUrl") or "").strip()
-
-        def omni_supervise(task: str, mode: str = "inspect", acceptance: str = "", max_rounds: int = 3) -> dict:
-            """Delegate a local PC task to Omni-Agent OS and return Hana supervision status."""
-            normalized_task = str(task or "").strip()
-            normalized_mode = str(mode or "inspect").strip().lower()
-            normalized_acceptance = acceptance if isinstance(acceptance, (str, list)) else ""
-            self._append_omni_terminal_event(
-                request.memory,
-                kind="tool_call",
-                status="running",
-                display_text=f"Delegando tarefa ao Omni ({normalized_mode}): {normalized_task[:240]}",
-                metadata={"mode": normalized_mode},
-            )
-            result = run_omni_supervise(
-                {
-                    "task": normalized_task,
-                    "mode": normalized_mode,
-                    "acceptance": normalized_acceptance,
-                    "max_rounds": max_rounds,
-                    "base_url": omni_url,
-                    "_background_job": True,
-                }
-            )
-            result_dict = result.to_dict()
-            self._append_omni_terminal_event(
-                request.memory,
-                kind="tool_result",
-                status="success" if result.ok else "failed",
-                display_text=str(result.output.get("response") or result.output.get("message") or result.error or "Omni job iniciado."),
-                metadata={"mode": normalized_mode, "toolResult": result_dict},
-            )
-            return result_dict
-
-        omni_supervise.__annotations__ = {
-            "task": str,
-            "mode": str,
-            "acceptance": str,
-            "max_rounds": int,
-            "return": dict,
-        }
-        return omni_supervise
-
-    @staticmethod
-    def _agent_job_cancel_callable(request: ProviderRequest):
-        """Create the Gemini callable that cancels active background agent jobs."""
-        if get_agent_job_manager() is None:
-            return None
-
-        def agent_job_cancel(job_id: str = "", agent: str = "", active: bool = True, reason: str = "user_request") -> dict:
-            """Cancel one Omni background job by id, agent, or active jobs."""
-            result = run_agent_job_cancel(
-                {
-                    "job_id": str(job_id or "").strip(),
-                    "agent": str(agent or "").strip().lower(),
-                    "active": bool(active),
-                    "reason": str(reason or "user_request").strip() or "user_request",
-                }
-            )
-            return result.to_dict()
-
-        agent_job_cancel.__annotations__ = {
-            "job_id": str,
-            "agent": str,
-            "active": bool,
-            "reason": str,
-            "return": dict,
-        }
-        return agent_job_cancel
 
     @staticmethod
     def _mcp_callables(request: ProviderRequest) -> list[Any]:

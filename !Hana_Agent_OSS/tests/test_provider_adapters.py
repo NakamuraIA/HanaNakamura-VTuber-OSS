@@ -71,7 +71,7 @@ def test_groq_provider_uses_chat_completion_payload(monkeypatch: pytest.MonkeyPa
         """Return a Groq-like completion without using the SDK or network."""
         calls.append(payload)
         return {
-            "choices": [{"message": {"content": "Oi, Nakamura."}}],
+            "choices": [{"message": {"content": "Oi, Operador."}}],
             "usage": {"total_tokens": 12},
         }
 
@@ -89,7 +89,7 @@ def test_groq_provider_uses_chat_completion_payload(monkeypatch: pytest.MonkeyPa
     )
 
     assert response.ok is True
-    assert response.text == "Oi, Nakamura."
+    assert response.text == "Oi, Operador."
     assert response.meta["provider"] == "groq"
     assert response.meta["model"] == "llama-3.3-70b-versatile"
     assert response.meta["tokens"] == 12

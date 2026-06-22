@@ -1,0 +1,7 @@
+{
+  "display_name": "Hana",
+  "identity_prompt": "Anime-style AI assistant girl, friendly and expressive, clean modern design. This is a generic placeholder avatar — edit this file or add your own characters under data/characters/<id>/character.json.",
+  "negative_prompt": "low quality, blurry, deformed",
+  "default_references": [],
+  "reference_images": {}
+}

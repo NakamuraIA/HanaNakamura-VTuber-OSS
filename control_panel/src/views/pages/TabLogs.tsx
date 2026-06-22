@@ -13,6 +13,9 @@ export function TabLogs() {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [isPaused, setIsPaused] = useState(false);
   const [filterLevel, setFilterLevel] = useState<string>("ALL");
+  // "Limpar" esconde tudo até este timestamp. O backend continua guardando os
+  // eventos (são a memória da Hana) — só a consola fica limpa.
+  const [clearedUntil, setClearedUntil] = useState<string>(() => localStorage.getItem("hana_logs_cleared_until") || "");
   const scrollRef = useRef<HTMLDivElement>(null);
   const isPausedRef = useRef(isPaused); // Para aceder no setInterval
 
@@ -57,7 +60,14 @@ export function TabLogs() {
     return index % 2 === 0 ? "bg-[rgba(255,255,255,0.02)]" : "bg-transparent";
   };
 
-  const filteredLogs = filterLevel === "ALL" ? logs : logs.filter(l => l.level === filterLevel);
+  const handleClear = () => {
+    const newest = logs.length ? logs[logs.length - 1].timestamp : new Date().toISOString();
+    setClearedUntil(newest);
+    localStorage.setItem("hana_logs_cleared_until", newest);
+  };
+
+  const visibleLogs = clearedUntil ? logs.filter(l => (l.timestamp || "") > clearedUntil) : logs;
+  const filteredLogs = filterLevel === "ALL" ? visibleLogs : visibleLogs.filter(l => l.level === filterLevel);
 
   return (
     <div className="w-full h-full bg-[var(--bg-sidebar)] backdrop-blur-2xl overflow-hidden shadow-2xl relative flex flex-col transition-all duration-500">
@@ -107,8 +117,8 @@ export function TabLogs() {
             <RefreshCw size={16} />
           </button>
 
-          <button 
-            onClick={() => setLogs([])}
+          <button
+            onClick={handleClear}
             className="p-2 rounded-lg bg-red-500/10 border border-red-500/30 text-red-400 hover:bg-red-500/20 transition-all"
             title="Limpar Consola"
           >

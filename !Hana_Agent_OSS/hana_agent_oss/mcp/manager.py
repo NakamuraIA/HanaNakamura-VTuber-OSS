@@ -9,6 +9,21 @@ from hana_agent_oss.mcp.config import McpConfigStore
 from hana_agent_oss.mcp.contracts import McpCallRequest, McpServerConfig, McpToolInfo
 
 
+def _unwrap_exc(exc: BaseException) -> str:
+    """Flatten an ExceptionGroup to the real leaf causes.
+
+    anyio/MCP wrap transport failures in a TaskGroup, so ``str(exc)`` is only the
+    useless "unhandled errors in a TaskGroup (1 sub-exception)" — hiding the actual
+    timeout / 401 / closed-stream error. We recurse into ``.exceptions`` and report the
+    leaves with their type, so the panel finally says WHY Tavily died.
+    """
+    sub = getattr(exc, "exceptions", None)
+    if sub:
+        return "; ".join(_unwrap_exc(inner) for inner in sub)
+    text = str(exc).strip()
+    return f"{type(exc).__name__}: {text}" if text else type(exc).__name__
+
+
 class McpManager:
     def __init__(self, config_store: McpConfigStore | None = None, client: McpStdioClient | None = None) -> None:
         self.config_store = config_store or McpConfigStore()
@@ -46,7 +61,7 @@ class McpManager:
         except asyncio.TimeoutError:
             return {**self._server_payload(server), "status": "error", "error": "mcp_server_timeout", "tools": []}
         except Exception as exc:  # noqa: BLE001 - surfaced as runtime status.
-            return {**self._server_payload(server), "status": "error", "error": f"mcp_server_unavailable: {exc}", "tools": []}
+            return {**self._server_payload(server), "status": "error", "error": f"mcp_server_unavailable: {_unwrap_exc(exc)}", "tools": []}
 
     async def call_tool(self, request: McpCallRequest) -> ToolResult:
         server = self.config_store.get_server(request.server_id)
@@ -55,7 +70,14 @@ class McpManager:
             return ToolResult(False, "mcp.invoke", error="mcp_server_not_found", output={"server_id": request.server_id})
         if not server.enabled:
             return ToolResult(False, "mcp.invoke", error="mcp_server_disabled", output={"server_id": server.id, "tool": tool_name})
-        if tool_name not in set(server.allowed_tools):
+        # Match tolerant to dash/underscore: providers rename tools across versions
+        # (Tavily: "tavily-search" -> "tavily_search"), which would otherwise reject a
+        # perfectly valid call as mcp_tool_not_allowed. Normalize both sides.
+        def _norm(name: str) -> str:
+            return str(name or "").strip().lower().replace("-", "_")
+
+        allowed_norm = {_norm(item) for item in server.allowed_tools}
+        if _norm(tool_name) not in allowed_norm:
             return ToolResult(False, "mcp.invoke", error="mcp_tool_not_allowed", output={"server_id": server.id, "tool": tool_name})
         try:
             result = await self.client.call_tool(server, tool_name, request.arguments)
@@ -66,7 +88,7 @@ class McpManager:
         except asyncio.TimeoutError:
             return ToolResult(False, "mcp.invoke", error="mcp_server_timeout", output={"server_id": server.id, "tool": tool_name})
         except Exception as exc:  # noqa: BLE001 - external process/protocol error.
-            return ToolResult(False, "mcp.invoke", error=f"mcp_server_unavailable: {exc}", output={"server_id": server.id, "tool": tool_name})
+            return ToolResult(False, "mcp.invoke", error=f"mcp_server_unavailable: {_unwrap_exc(exc)}", output={"server_id": server.id, "tool": tool_name})
 
         return ToolResult(
             ok=result.ok,
@@ -107,5 +129,6 @@ class McpManager:
     @staticmethod
     def _tool_payload(server: McpServerConfig, tool: McpToolInfo) -> dict[str, Any]:
         data = tool.to_dict()
-        data["allowed"] = tool.name in set(server.allowed_tools)
+        _allowed_norm = {str(item or "").strip().lower().replace("-", "_") for item in server.allowed_tools}
+        data["allowed"] = str(tool.name or "").strip().lower().replace("-", "_") in _allowed_norm
         return data

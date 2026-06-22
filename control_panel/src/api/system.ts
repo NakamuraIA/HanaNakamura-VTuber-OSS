@@ -39,7 +39,7 @@ export const SystemApi = {
       llmProvider: "—",
       llmModel: "—",
       ttsProvider: "—",
-      modules: { llm: false, tts: false, stt: false, visao: false, vtube_studio: false, discord: false, omni: false },
+      modules: { llm: false, tts: false, stt: false, visao: false, discord: false, localHands: true },
     });
   },
 
@@ -76,20 +76,4 @@ export const SystemApi = {
     }
   },
 
-  getVtsState: async () => {
-    return readJson("/api/vts/state", {
-      status: "disabled",
-      connected: false,
-      authenticated: false,
-      host: "127.0.0.1",
-      port: 8001,
-      hotkeys: 0,
-      expressions: 0,
-      mouth_parameter: "N/A",
-      tracking_mode: "disabled",
-      last_error: "Modulo VTube opcional desativado no runtime base.",
-      last_expression: "",
-      updated_at: Date.now() / 1000,
-    });
-  },
 };

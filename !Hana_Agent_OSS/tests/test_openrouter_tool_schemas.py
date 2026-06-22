@@ -23,14 +23,6 @@ def _all_enum_values(value: Any) -> list[Any]:
     return collected
 
 
-def test_openrouter_agent_cancel_schema_has_no_empty_enum_value() -> None:
-    """Google-backed OpenRouter models must receive only valid agent enum choices."""
-    schema = OpenRouterProvider._agent_job_cancel_schema()
-
-    agent_schema = schema["function"]["parameters"]["properties"]["agent"]
-    assert agent_schema["enum"] == ["omni", "grok"]
-
-
 def test_openrouter_sanitizes_empty_nested_enum_values() -> None:
     """Defensive schema cleanup removes blank options before provider submission."""
     schema = {
@@ -39,7 +31,7 @@ def test_openrouter_sanitizes_empty_nested_enum_values() -> None:
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "agent": {"type": "string", "enum": ["", "omni", None, "grok"]},
+                    "shell": {"type": "string", "enum": ["", "cmd", None, "powershell"]},
                     "unused": {"type": "string", "enum": ["", None]},
                 },
             },
@@ -48,19 +40,15 @@ def test_openrouter_sanitizes_empty_nested_enum_values() -> None:
 
     sanitized = OpenRouterProvider._sanitize_tool_schema(schema)
 
-    assert sanitized["function"]["parameters"]["properties"]["agent"]["enum"] == ["omni", "grok"]
+    assert sanitized["function"]["parameters"]["properties"]["shell"]["enum"] == ["cmd", "powershell"]
     assert "enum" not in sanitized["function"]["parameters"]["properties"]["unused"]
 
 
-def test_openrouter_omni_tool_bundle_contains_no_blank_enums(tmp_path) -> None:
-    """Enabling Omni must keep the complete OpenRouter tool bundle provider-valid."""
+def test_openrouter_tool_bundle_exposes_mcp_and_local_hands(tmp_path) -> None:
+    """The OpenRouter tool bundle exposes MCP + local hands and stays provider-valid."""
     memory = MemoryStore(
         db_path=tmp_path / "memory.sqlite3",
         events_path=tmp_path / "events.jsonl",
-    )
-    memory.set_setting(
-        "connections_config",
-        {"omni": True, "omniUrl": "http://127.0.0.1:8060"},
     )
     request = ProviderRequest(
         provider="openrouter",
@@ -75,12 +63,8 @@ def test_openrouter_omni_tool_bundle_contains_no_blank_enums(tmp_path) -> None:
     )
 
     function_names = [schema["function"]["name"] for schema in schemas]
-    assert function_names[:4] == [
-        "mcp_discover",
-        "mcp_invoke",
-        "omni_supervise",
-        "agent_job_cancel",
-    ]
-    assert "omni_supervise" in runners
-    assert "agent_job_cancel" in runners
+    assert function_names[:2] == ["mcp_discover", "mcp_invoke"]
+    assert "terminal_run" in function_names
+    assert "terminal_inspect_dir" in function_names
+    assert "terminal_run" in runners
     assert "" not in _all_enum_values(schemas)

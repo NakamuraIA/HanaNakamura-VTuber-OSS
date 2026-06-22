@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from hana_agent_oss.api.services import chat
 from hana_agent_oss.memory.store import MemoryStore
-from hana_agent_oss.modules.attachments import AttachmentStore, attachment_reference_mime_prefixes, attachment_reference_requested
+from hana_agent_oss.modules.attachments import AttachmentStore
 
 from hana_agent_oss.providers.provider_selector.gemini_api.provider import GeminiApiProvider
 
@@ -46,7 +46,8 @@ def test_attachment_store_saves_file_and_recovers_recent(tmp_path) -> None:
     assert recent[0]["path"].endswith("plano.pdf")
 
 
-def test_chat_resolves_recent_attachment_when_user_references_file(monkeypatch, tmp_path) -> None:
+def test_chat_resolves_only_uploaded_attachments(monkeypatch, tmp_path) -> None:
+    """Uploaded attachments are persisted; nothing is auto-recovered by words."""
     memory = MemoryStore(tmp_path / "memory.sqlite3", tmp_path / "events.jsonl")
     store = AttachmentStore(tmp_path / "attachments")
     monkeypatch.setattr(chat, "ATTACHMENT_STORE", store)
@@ -56,13 +57,15 @@ def test_chat_resolves_recent_attachment_when_user_references_file(monkeypatch, 
         memory=memory,
         text="analisa esse pdf",
     )
+    assert first[0]["name"] == "plano.pdf"
+
+    # A follow-up that merely MENTIONS the file must NOT pull it back (no keyword trigger).
     second = chat.resolve_chat_attachments({}, memory=memory, text="quais eram os valores do PDF?")
-
-    assert first[0]["path"] == second[0]["path"]
-    assert attachment_reference_requested("quais eram os valores do PDF?")
+    assert second == []
 
 
-def test_attachment_reference_filters_recent_files_by_requested_type(monkeypatch, tmp_path) -> None:
+def test_no_keyword_trigger_pulls_stored_media(monkeypatch, tmp_path) -> None:
+    """Typing 'imagem'/'áudio' must never auto-attach stored media (user forbids triggers)."""
     memory = MemoryStore(tmp_path / "memory.db")
     store = AttachmentStore(tmp_path / "attachments")
     monkeypatch.setattr(chat, "ATTACHMENT_STORE", store)
@@ -76,26 +79,9 @@ def test_attachment_reference_filters_recent_files_by_requested_type(monkeypatch
         user_text="arquivos de teste",
     )
 
-    resolved = chat.resolve_chat_attachments({}, memory=memory, text="raciocinio em cima da imagem")
-
-    assert attachment_reference_mime_prefixes("raciocinio em cima da imagem") == ("image/",)
-    assert [item["type"] for item in resolved] == ["image/png"]
-
-
-def test_attachment_reference_does_not_mix_audio_into_image_followup(monkeypatch, tmp_path) -> None:
-    memory = MemoryStore(tmp_path / "memory.db")
-    store = AttachmentStore(tmp_path / "attachments")
-    monkeypatch.setattr(chat, "ATTACHMENT_STORE", store)
-    store.save_many(
-        [{"name": "voice.mp3", "type": "audio/mpeg", "data": _data_url("audio/mpeg", b"mp3")}],
-        memory=memory,
-        channel="control_center",
-        user_text="audio anterior",
-    )
-
-    resolved = chat.resolve_chat_attachments({}, memory=memory, text="ela esta boa em raciocinio em cima da imagem")
-
-    assert resolved == []
+    assert chat.resolve_chat_attachments({}, memory=memory, text="raciocinio em cima da imagem") == []
+    assert chat.resolve_chat_attachments({}, memory=memory, text="me manda o audio") == []
+    assert chat.resolve_chat_attachments({}, memory=memory, text="ve se tem arquivo .py") == []
 
 
 def test_gemini_attachment_parts_can_read_persisted_path(tmp_path) -> None:

@@ -12,12 +12,8 @@ export const DEFAULT_CONNECTIONS_CONFIG: ConnectionsConfig = {
   pttKey: "F2",
   stopHotkey: true,
   stopKey: "F4",
-  vts: false,
   discord: false,
-  discordSpeak: false,
-  discordListen: false,
-  omni: false,
-  omniUrl: "http://127.0.0.1:8060",
+  localHands: true,
   visao: false,
 };
 

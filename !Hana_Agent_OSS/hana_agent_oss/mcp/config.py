@@ -20,7 +20,7 @@ MCP_PRESETS: dict[str, dict[str, Any]] = {
         "env": {"TAVILY_API_KEY": "${TAVILY_API_KEY}"},
         "cwd": "E:\\Projeto_Hana_AI",
         "timeout": 30,
-        "allowed_tools": ["tavily-search"],
+        "allowed_tools": ["tavily_search", "tavily_extract", "tavily_crawl", "tavily_map"],
     }
 }
 

@@ -1,12 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import subprocess
 import threading
-import time
-import urllib.error
-import urllib.request
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -16,13 +12,6 @@ from typing import Any, Awaitable, Callable
 from hana_agent_oss.api.services.terminal_agent import append_terminal_event
 from hana_agent_oss.core.protocol import ToolResult
 from hana_agent_oss.memory.store import MemoryStore
-from hana_agent_oss.tools.omni_tools import (
-    _build_omni_command,
-    _clean_base_url,
-    _post_omni_command,
-    _timeout_seconds,
-    parse_omni_report,
-)
 
 
 AGENT_JOBS_SETTING = "agent_jobs_runtime"
@@ -58,7 +47,7 @@ class ActiveJobRuntime:
 
 
 class AgentJobManager:
-    """Runs long Omni tasks outside the blocking chat turn."""
+    """Runs long background agent tasks outside the blocking chat turn."""
 
     def __init__(self, memory: MemoryStore, *, history_limit: int = JOB_HISTORY_LIMIT) -> None:
         self.memory = memory
@@ -94,38 +83,6 @@ class AgentJobManager:
             job = self._jobs.get(job_id)
             return dict(job) if job else None
 
-    def start_omni(self, args: dict[str, Any], *, tool_name: str = "omni.supervise") -> ToolResult:
-        """Create a background Omni job and return immediately."""
-        try:
-            command, normalized = _build_omni_command(args)
-        except ValueError as exc:
-            return ToolResult(ok=False, tool=tool_name, error=str(exc))
-
-        base_url = _clean_base_url(args)
-        timeout = _timeout_seconds(args)
-        job = self._create_job(
-            agent="omni",
-            tool=tool_name,
-            mode=str(normalized.get("mode") or "inspect"),
-            task=str(normalized.get("task") or ""),
-            cwd=str(normalized.get("cwd") or ""),
-            metadata={
-                "acceptance": normalized.get("acceptance") or [],
-                "base_url": base_url,
-                "command": command,
-                "timeout_seconds": timeout,
-            },
-        )
-        if not job["ok"]:
-            return ToolResult(ok=False, tool=tool_name, error=str(job["error"]), output={"activeJob": job.get("activeJob")})
-
-        job_id = str(job["job"]["job_id"])
-        runtime = self._runtimes[job_id]
-        thread = threading.Thread(target=self._run_omni_job, args=(job_id,), name=f"hana-omni-job-{job_id[:8]}", daemon=True)
-        runtime.thread = thread
-        thread.start()
-        return self._job_started_result(job["job"])
-
     def cancel_job(self, job_id: str, *, reason: str = "user_request") -> dict[str, Any]:
         """Request cancellation for one active job."""
         job_id = str(job_id or "").strip()
@@ -153,7 +110,7 @@ class AgentJobManager:
                 except Exception:
                     pass
 
-        self._append_terminal(job_id, "job.cancel_requested", "Cancelamento solicitado pela Nakamura.", status="running")
+        self._append_terminal(job_id, "job.cancel_requested", "Cancelamento solicitado pela Operador.", status="running")
         return {"ok": True, "cancelRequested": True, "job": self.get_job(job_id)}
 
     def cancel_active(self, *, agent: str = "", reason: str = "user_request") -> dict[str, Any]:
@@ -334,7 +291,7 @@ class AgentJobManager:
 
     def _agent_label(self, job_id: str) -> str:
         """Return a user-facing label for the job agent."""
-        return "Omni"
+        return "Agente"
 
     def _cancel_requested(self, job_id: str) -> bool:
         """Return whether the current job was asked to stop."""
@@ -343,7 +300,7 @@ class AgentJobManager:
 
     def _job_started_result(self, job: dict[str, Any]) -> ToolResult:
         """Build the immediate ToolResult returned to the LLM after enqueueing a job."""
-        label = "Omni"
+        label = "Agente"
         return ToolResult(
             ok=True,
             tool=str(job.get("tool") or "agent.job"),
@@ -374,160 +331,6 @@ class AgentJobManager:
 
         threading.Thread(target=runner, name="hana-agent-job-speech", daemon=True).start()
 
-    def _read_process_streams(self, job_id: str, process: subprocess.Popen[str], stdout_lines: list[str], stderr_lines: list[str]) -> None:
-        """Read stdout and stderr in helper threads to avoid subprocess deadlocks."""
-        runtime = self._runtimes.get(job_id)
-
-        def reader(stream: Any, target: list[str], label: str) -> None:
-            try:
-                for line in iter(stream.readline, ""):
-                    clean = line.rstrip()
-                    if not clean:
-                        continue
-                    target.append(clean)
-                    self._append_progress(job_id, f"job.{label}", clean)
-            except Exception:
-                return
-
-        threads = [
-            threading.Thread(target=reader, args=(process.stdout, stdout_lines, "stdout"), daemon=True),
-            threading.Thread(target=reader, args=(process.stderr, stderr_lines, "stderr"), daemon=True),
-        ]
-        for thread in threads:
-            thread.start()
-        if runtime:
-            runtime.reader_threads = threads
-
-    def _wait_stream_threads(self, runtime: ActiveJobRuntime | None) -> None:
-        """Give process stream reader threads a moment to flush final output."""
-        for thread in runtime.reader_threads if runtime else []:
-            try:
-                thread.join(timeout=1.0)
-            except Exception:
-                pass
-
-    def _terminate_process(self, process: subprocess.Popen[str]) -> None:
-        """Terminate a subprocess gently first and force kill if it ignores cancellation."""
-        if process.poll() is not None:
-            return
-        try:
-            process.terminate()
-            process.wait(timeout=3)
-            return
-        except Exception:
-            pass
-        try:
-            process.kill()
-        except Exception:
-            pass
-
-    def _run_omni_job(self, job_id: str) -> None:
-        """Run one Omni command, preferring its streaming endpoint for progress."""
-        self._mark_started(job_id)
-        job = self.get_job(job_id) or {}
-        metadata = job.get("metadata") if isinstance(job.get("metadata"), dict) else {}
-        base_url = str(metadata.get("base_url") or "").rstrip("/")
-        command = str(metadata.get("command") or "")
-        timeout = int(metadata.get("timeout_seconds") or 0)
-        try:
-            result = self._run_omni_stream(job_id, base_url, command, timeout)
-        except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, ValueError):
-            if self._cancel_requested(job_id):
-                self._finish_job(job_id, status="cancelled", error="cancelled_by_user")
-                return
-            self._append_progress(job_id, "job.progress", "Stream do Omni indisponivel; usando endpoint sincrono.")
-            result = self._run_omni_sync(job_id, base_url, command, timeout)
-        except Exception as exc:  # noqa: BLE001
-            if self._cancel_requested(job_id):
-                self._finish_job(job_id, status="cancelled", error="cancelled_by_user")
-                return
-            self._finish_job(job_id, status="failed", error=f"omni_bridge_error:{exc}", speech="Omni falhou. Deixei o erro no terminal.")
-            return
-
-        if self._cancel_requested(job_id):
-            self._finish_job(job_id, status="cancelled", error="cancelled_by_user")
-            return
-        if result.get("ok"):
-            self._finish_job(job_id, status="done", result=result, speech="Omni terminou a tarefa. Deixei o relatorio no terminal.")
-            return
-        self._finish_job(job_id, status="failed", result=result, error=str(result.get("error") or "omni_failed"), speech="Omni falhou. Deixei o erro no terminal.")
-
-    def _run_omni_stream(self, job_id: str, base_url: str, command: str, timeout: int) -> dict[str, Any]:
-        """Read Omni's SSE-like stream and convert it into Hana job progress."""
-        url = f"{base_url}/api/command/stream"
-        body = json.dumps({"command": command}).encode("utf-8")
-        request = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json", "Accept": "text/event-stream"}, method="POST")
-        runtime = self._runtimes.get(job_id)
-        text_chunks: list[str] = []
-        error_text = ""
-        response = urllib.request.urlopen(request, timeout=None if timeout <= 0 else timeout)
-        if runtime:
-            runtime.stream_response = response
-        try:
-            for raw_line in response:
-                if self._cancel_requested(job_id):
-                    break
-                line = raw_line.decode("utf-8", errors="replace").strip()
-                if not line:
-                    continue
-                if line.startswith("data:"):
-                    line = line[5:].strip()
-                try:
-                    payload = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                event_type = str(payload.get("type") or "step")
-                if event_type in {"text", "delta"}:
-                    text_chunks.append(str(payload.get("content") or ""))
-                    continue
-                if event_type == "error":
-                    error_text = str(payload.get("content") or payload.get("message") or "omni_stream_error")
-                    self._append_progress(job_id, "job.error", error_text)
-                    continue
-                if event_type == "done":
-                    break
-                message = str(payload.get("message") or event_type)
-                detail = str(payload.get("detail") or payload.get("tool") or "")
-                self._append_progress(job_id, f"job.{event_type}", message, detail=detail)
-        finally:
-            if runtime:
-                runtime.stream_response = None
-            try:
-                response.close()
-            except Exception:
-                pass
-
-        response_text = "".join(text_chunks).strip()
-        report = parse_omni_report(response_text)
-        return {
-            "ok": bool(response_text) and not error_text,
-            "backend": "omni",
-            "status": "success" if response_text and not error_text else "failed",
-            "completion_status": report["status"],
-            "needs_follow_up": report["status"] != "done",
-            "report": report,
-            "response": compact_text(response_text),
-            "error": error_text,
-            "base_url": base_url,
-        }
-
-    def _run_omni_sync(self, job_id: str, base_url: str, command: str, timeout: int) -> dict[str, Any]:
-        """Fallback to Omni's legacy synchronous endpoint."""
-        if self._cancel_requested(job_id):
-            return {"ok": False, "error": "cancelled_by_user"}
-        status, response_text = _post_omni_command(base_url, command, timeout)
-        report = parse_omni_report(response_text)
-        return {
-            "ok": status.lower() == "success" and bool(response_text),
-            "backend": "omni",
-            "status": status,
-            "completion_status": report["status"],
-            "needs_follow_up": report["status"] != "done",
-            "report": report,
-            "response": compact_text(response_text),
-            "base_url": base_url,
-        }
-
 
 _AGENT_JOB_MANAGER: AgentJobManager | None = None
 
@@ -544,7 +347,7 @@ def get_agent_job_manager() -> AgentJobManager | None:
 
 
 def agent_job_cancel(args: dict[str, Any]) -> ToolResult:
-    """Cancel Omni background jobs from a real LLM tool call."""
+    """Cancel background agent jobs from a real LLM tool call."""
     manager = get_agent_job_manager()
     if manager is None:
         return ToolResult(ok=False, tool="agent.job.cancel", error="agent_job_manager_not_ready")

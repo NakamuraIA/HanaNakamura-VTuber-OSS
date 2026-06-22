@@ -77,7 +77,7 @@ class StructuredPlanner:
         return PlannerResult(
             PlannerAction(
                 "planner_not_connected",
-                message="Planner LLM is not connected yet. Try: tools, capabilities, file.exists, file.read, file.write, file.append, file.verify_content, memory.search, memory.save, memory.audit, mcp.discover, mcp.invoke, omni.delegate, or omni.supervise.",
+                message="Planner LLM is not connected yet. Try: tools, capabilities, file.exists, file.read, file.write, file.append, file.verify_content, memory.search, memory.save, memory.audit, mcp.discover, mcp.invoke, or terminal.run.",
                 reason="No deterministic intent matched.",
             ),
             context_used=context_used,
@@ -188,19 +188,8 @@ class StructuredPlanner:
                     arguments = {}
             return ToolCall(tool="mcp.invoke", args={"server_id": parts[1], "tool": parts[2], "arguments": arguments})
 
-        if command in {"omni", "omni.delegate"}:
-            task = " ".join(parts[1:]).strip('"') if len(parts) >= 2 else extra_args.get("task", "")
-            mode = str(extra_args.get("mode") or "inspect")
-            return ToolCall(tool="omni.delegate", args={"task": task, "mode": mode}, reason="User delegated a task to Omni.")
-
-        if command == "omni.supervise":
-            task = " ".join(parts[1:]).strip('"') if len(parts) >= 2 else extra_args.get("task", "")
-            mode = str(extra_args.get("mode") or "inspect")
-            max_rounds = extra_args.get("max_rounds", 3)
-            return ToolCall(
-                tool="omni.supervise",
-                args={"task": task, "mode": mode, "max_rounds": max_rounds},
-                reason="User delegated a supervised task to Omni.",
-            )
+        if command in {"terminal", "terminal.run", "run"}:
+            cmd = " ".join(parts[1:]).strip('"') if len(parts) >= 2 else extra_args.get("command", "")
+            return ToolCall(tool="terminal.run", args={"command": cmd}, reason="User asked to run a local command.")
 
         return None

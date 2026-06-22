@@ -29,7 +29,7 @@ def test_memory_store_migrates_v1_rows_to_v2(tmp_path):
               updated_at TEXT NOT NULL
             );
             INSERT INTO memory_items (id, text, kind, source, metadata_json, created_at, updated_at)
-            VALUES ('old-1', 'Nakamura gosta de yakisoba', 'long_term', 'model', '{"importance":"high","category":"preference","tags":["food"]}', '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00');
+            VALUES ('old-1', 'Operador gosta de yakisoba', 'long_term', 'model', '{"importance":"high","category":"preference","tags":["food"]}', '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00');
             """
         )
 
@@ -68,8 +68,8 @@ def test_memory_crud_soft_delete_restore_and_hard_delete(tmp_path):
 
 def test_memory_ranking_uses_pin_and_strengthens_usage(tmp_path):
     memory = _memory(tmp_path)
-    first = memory.add_memory("Nakamura gosta de yakisoba", metadata={"importance": "medium"})
-    second = memory.add_memory("Nakamura gosta de yakisoba no fim da noite", metadata={"importance": "medium"})
+    first = memory.add_memory("Operador gosta de yakisoba", metadata={"importance": "medium"})
+    second = memory.add_memory("Operador gosta de yakisoba no fim da noite", metadata={"importance": "medium"})
     memory.pin_memory(second["id"], pinned=True)
 
     results = memory.search("yakisoba", limit=2)
@@ -82,8 +82,8 @@ def test_memory_ranking_uses_pin_and_strengthens_usage(tmp_path):
 
 def test_memory_compact_merge_and_maintenance(tmp_path):
     memory = _memory(tmp_path)
-    first = memory.add_memory("Nakamura prefere memoria leve", metadata={"category": "preference"})
-    second = memory.add_memory("Nakamura prefere memoria leve", metadata={"category": "preference"})
+    first = memory.add_memory("Operador prefere memoria leve", metadata={"category": "preference"})
+    second = memory.add_memory("Operador prefere memoria leve", metadata={"category": "preference"})
     third = memory.add_memory("Hana deve compactar conversas antigas", metadata={"category": "maintenance"})
 
     compacted = memory.compact(memory_ids=[first["id"], third["id"]], archive_originals=True)
@@ -99,7 +99,7 @@ def test_memory_compact_merge_and_maintenance(tmp_path):
     assert merged["created"] is True
     assert merged["sourceCount"] == 2
 
-    duplicate = memory.add_memory("Nakamura prefere memoria leve", metadata={"category": "preference"})
+    duplicate = memory.add_memory("Operador prefere memoria leve", metadata={"category": "preference"})
     maintenance = memory.run_maintenance()
     assert maintenance["ok"] is True
     assert maintenance["archivedDuplicates"] >= 1
@@ -127,7 +127,7 @@ def test_memory_api_v2_lifecycle(tmp_path):
     app.state.memory = _memory(tmp_path)
     client = TestClient(app)
 
-    create = client.post("/api/memory/rag", json={"text": "Nakamura quer memoria RAG leve", "category": "project", "importance": "high"})
+    create = client.post("/api/memory/rag", json={"text": "Operador quer memoria RAG leve", "category": "project", "importance": "high"})
     assert create.status_code == 200
     memory_id = create.json()["memory"]["id"]
 

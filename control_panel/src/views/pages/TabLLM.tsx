@@ -10,13 +10,14 @@ import {
   VoiceSpec,
 } from "../../models/providerCatalog";
 
-import { BrainCircuit, Eye, Mic, Plus, Save, Play, Trash2, Image as ImageIcon } from "lucide-react";
+import { BrainCircuit, Eye, Mic, Plus, Save, Play, Trash2, Image as ImageIcon, Bot } from "lucide-react";
 import { useAudioUI } from "../../hooks/useAudioUI";
 import { TabHeader } from "../components/shared/TabHeader";
 import { Card } from "../components/shared/Card";
 import { Button } from "../components/shared/Button";
 import { CatalogPicker, CatalogPickerOption } from "../components/shared/CatalogPicker";
 import { DEFAULT_OPENROUTER_ROUTING, OpenRouterEndpointPicker } from "../components/shared/OpenRouterEndpointPicker";
+import { readRememberedVoices, rememberVoice } from "../../models/voiceMemory";
 
 const PROVIDER_ALIASES: Record<string, string> = {
   google_platform: "gemini_api",
@@ -43,11 +44,25 @@ function normalizeProvider(provider?: string) {
   return PROVIDER_ALIASES[value] || value || "gemini_api";
 }
 
+function pricePerMillion(value: unknown): string {
+  /** OpenRouter reports price PER TOKEN; humans read price per 1M tokens. */
+  const n = Number(value);
+  if (!Number.isFinite(n)) return "?";
+  const perM = n * 1_000_000;
+  if (perM === 0) return "$0";
+  if (perM >= 100) return `$${perM.toFixed(0)}`;
+  if (perM < 0.01) return "<$0.01"; // evita mostrar "$0.00" pra modelo pago
+  return `$${perM.toFixed(2)}`;
+}
+
 function priceLabel(model?: ModelSpec) {
   const pricing = model?.pricing || {};
-  if (model?.free) return "free";
-  if (!pricing.prompt && !pricing.completion) return "";
-  return `in ${pricing.prompt || "?"} / out ${pricing.completion || "?"}`;
+  if (model?.free) return "grátis";
+  const hasIn = pricing.prompt != null && pricing.prompt !== "";
+  const hasOut = pricing.completion != null && pricing.completion !== "";
+  if (!hasIn && !hasOut) return "";
+  if (Number(pricing.prompt) === 0 && Number(pricing.completion) === 0) return "grátis";
+  return `in ${pricePerMillion(pricing.prompt)} / out ${pricePerMillion(pricing.completion)} /M`;
 }
 
 function modelPriceScore(model: ModelSpec) {
@@ -120,6 +135,7 @@ export function TabLLM() {
   const [imageConfig, setImageConfig] = useState<ImageConfig | null>(null);
   const [catalogModels, setCatalogModels] = useState<ModelSpec[]>(MODEL_CATALOG);
   const [catalogVoices, setCatalogVoices] = useState<VoiceSpec[]>(VOICE_CATALOG);
+  const [rememberedVoices, setRememberedVoices] = useState<string[]>([]);
   const [llmProviders, setLlmProviders] = useState<string[]>(LLM_PROVIDERS);
   const [ttsProviders, setTtsProviders] = useState<string[]>(TTS_PROVIDERS);
   const [imageProviders, setImageProviders] = useState<string[]>(["gemini_api", "openrouter"]);
@@ -168,6 +184,9 @@ export function TabLLM() {
     () => catalogVoices.filter((voice) => voice.provider === config?.ttsProvider),
     [catalogVoices, config?.ttsProvider],
   );
+  useEffect(() => {
+    setRememberedVoices(readRememberedVoices(config?.ttsProvider || ""));
+  }, [config?.ttsProvider]);
   const availableTtsModels = useMemo(
     () => TTS_MODELS_BY_PROVIDER[config?.ttsProvider || ""] || [],
     [config?.ttsProvider],
@@ -184,12 +203,24 @@ export function TabLLM() {
     () => ensureCurrentOption(availableVisionModels.map(modelPickerOption), config?.visionModel || "", `${config?.llmProvider || "llm"}:vision`),
     [availableVisionModels, config?.llmProvider, config?.visionModel],
   );
+  // Effective agent provider: blank means "same as the main provider".
+  const agentProvider = (config?.agentProvider || config?.llmProvider || "") as string;
+  const availableAgentModels = useMemo(
+    () => catalogModels.filter((model) => model.provider === agentProvider && (model.outputModalities || []).includes("text")),
+    [catalogModels, agentProvider],
+  );
+  const agentPickerOptions = useMemo(
+    () => ensureCurrentOption(availableAgentModels.map(modelPickerOption), config?.agentModel || "", `${agentProvider || "llm"}:agent`),
+    [availableAgentModels, config?.agentModel, agentProvider],
+  );
   const ttsVoicePickerOptions = useMemo(() => {
+    const provider = config?.ttsProvider || "tts";
+    const known = new Set(availableTtsVoices.map((voice) => voice.id));
     const options: CatalogPickerOption[] = [
       {
         value: "",
         label: "Padrao do provider",
-        favoriteId: `${config?.ttsProvider || "tts"}:default`,
+        favoriteId: `${provider}:default`,
       },
       ...availableTtsVoices.map((voice) => ({
         value: voice.id,
@@ -197,9 +228,19 @@ export function TabLLM() {
         favoriteId: `${voice.provider}:${voice.id}`,
         secondary: voice.id,
       })),
+      // Vozes que o usuario ja colou antes (persistidas), pra nao re-copiar do ElevenLabs.
+      ...rememberedVoices
+        .filter((id) => id && !known.has(id))
+        .map((id) => ({
+          value: id,
+          label: id,
+          favoriteId: `${provider}:${id}`,
+          secondary: id,
+          badges: [{ label: "salva", tone: "purple" as const }],
+        })),
     ];
-    return ensureCurrentOption(options, config?.ttsVoice || "", config?.ttsProvider || "tts");
-  }, [availableTtsVoices, config?.ttsProvider, config?.ttsVoice]);
+    return ensureCurrentOption(options, config?.ttsVoice || "", provider);
+  }, [availableTtsVoices, config?.ttsProvider, config?.ttsVoice, rememberedVoices]);
   const ttsModelPickerOptions = useMemo(() => {
     const options: CatalogPickerOption[] = [
       { value: "", label: "Padrao do provider", favoriteId: `${config?.ttsProvider || "tts"}:default-model` },
@@ -265,65 +306,35 @@ export function TabLLM() {
   };
 
   // Keeps chat TTS defaults valid when the provider changes.
+  // Campos de TTS que pertencem a cada provider (voz custom, controles, etc).
+  const TTS_PROVIDER_FIELDS = [
+    "ttsModel", "ttsVoice", "ttsLanguage", "ttsSpeed", "ttsPitch", "ttsStreaming",
+    "ttsStability", "ttsSimilarity", "ttsStyle", "ttsSpeakerBoost",
+  ] as const;
+
+  const TTS_PROVIDER_DEFAULTS: Record<string, Partial<LlmConfig>> = {
+    gemini_tts: { ttsModel: "gemini-3.1-flash-tts-preview", ttsVoice: "Leda", ttsLanguage: "pt-BR", ttsStreaming: false },
+    google_cloud_tts: { ttsModel: "", ttsVoice: "pt-BR-Neural2-C", ttsLanguage: "pt-BR", ttsSpeed: 1, ttsPitch: 0 },
+    edge: { ttsModel: "", ttsVoice: "pt-BR-FranciscaNeural", ttsLanguage: "pt-BR", ttsSpeed: 1, ttsPitch: 0, ttsStreaming: false },
+    elevenlabs: {
+      ttsModel: "eleven_flash_v2_5", ttsVoice: "JBFqnCBsd6RMkjVDRZzb", ttsLanguage: "pt",
+      ttsSpeed: 1, ttsPitch: 0, ttsStreaming: false,
+      ttsStability: 0.5, ttsSimilarity: 0.75, ttsStyle: 0, ttsSpeakerBoost: true,
+    },
+  };
+
   const updateChatTtsProvider = (provider: string) => {
-    if (provider === "gemini_tts") {
-      setConfig(prev => prev ? {
-        ...prev,
-        ttsProvider: provider,
-        ttsModel: "gemini-3.1-flash-tts-preview",
-        ttsVoice: "Leda",
-        ttsLanguage: "pt-BR",
-        ttsStreaming: false,
-      } : prev);
-      audio.playClick();
-      return;
-    }
-    if (provider === "google_cloud_tts") {
-      setConfig(prev => prev ? {
-        ...prev,
-        ttsProvider: provider,
-        ttsModel: "",
-        ttsVoice: "pt-BR-Neural2-C",
-        ttsLanguage: "pt-BR",
-        ttsSpeed: 1,
-        ttsPitch: 0,
-      } : prev);
-      audio.playClick();
-      return;
-    }
-    if (provider === "edge") {
-      setConfig(prev => prev ? {
-        ...prev,
-        ttsProvider: provider,
-        ttsModel: "",
-        ttsVoice: "pt-BR-FranciscaNeural",
-        ttsLanguage: "pt-BR",
-        ttsSpeed: 1,
-        ttsPitch: 0,
-        ttsStreaming: false,
-      } : prev);
-      audio.playClick();
-      return;
-    }
-    if (provider === "elevenlabs") {
-      setConfig(prev => prev ? {
-        ...prev,
-        ttsProvider: provider,
-        ttsModel: "eleven_flash_v2_5",
-        ttsVoice: "JBFqnCBsd6RMkjVDRZzb",
-        ttsLanguage: "pt",
-        ttsSpeed: 1,
-        ttsPitch: 0,
-        ttsStreaming: false,
-        ttsStability: 0.5,
-        ttsSimilarity: 0.75,
-        ttsStyle: 0,
-        ttsSpeakerBoost: true,
-      } : prev);
-      audio.playClick();
-      return;
-    }
-    updateField("ttsProvider", provider);
+    setConfig(prev => {
+      if (!prev) return prev;
+      // 1) Snapshot do provider atual: a voz custom/controles ficam guardados.
+      const snapshot: Partial<LlmConfig> = {};
+      for (const field of TTS_PROVIDER_FIELDS) (snapshot as any)[field] = prev[field];
+      const ttsByProvider = { ...(prev.ttsByProvider || {}), [prev.ttsProvider]: snapshot };
+      // 2) Restaura o que foi salvo pro novo provider; senão usa os defaults dele.
+      const restored = ttsByProvider[provider] || TTS_PROVIDER_DEFAULTS[provider] || {};
+      return { ...prev, ...TTS_PROVIDER_DEFAULTS[provider], ...restored, ttsProvider: provider, ttsByProvider };
+    });
+    audio.playClick();
   };
 
   const playChatTtsTest = async () => {
@@ -332,7 +343,7 @@ export function TabLLM() {
     setTtsTestStatus("Gerando teste de TTS do Chat...");
     await ApiController.updateLlmConfig(config);
     try {
-      const result = await ApiController.synthesizeTerminalAgentSpeech("Oi, Nakamura. Este e um teste da TTS do Chat do Controle.", {
+      const result = await ApiController.synthesizeTerminalAgentSpeech("Oi, Operador. Este e um teste da TTS do Chat do Controle.", {
         provider: config.ttsProvider,
         model: config.ttsModel,
         voice: config.ttsVoice,
@@ -482,6 +493,26 @@ export function TabLLM() {
               </span>
             </div>
 
+            {config.llmProvider === "groq" && (
+              <>
+                <span className="text-sm font-bold text-[var(--text-secondary)] md:pl-4 uppercase tracking-wider">Pensar antes de falar:</span>
+                <div className="flex items-center gap-3 bg-[rgba(0,0,0,0.4)] p-2 rounded-lg border border-[var(--border-strong)] shadow-inner md:col-span-3">
+                  <button
+                    type="button"
+                    onClick={() => updateField("groqThinking", !(config.groqThinking ?? true))}
+                    className={`relative h-6 w-11 rounded-full transition-colors ${(config.groqThinking ?? true) ? "bg-[var(--purple-neon)]" : "bg-[rgba(255,255,255,0.15)]"}`}
+                  >
+                    <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white transition-all ${(config.groqThinking ?? true) ? "left-[22px]" : "left-0.5"}`} />
+                  </button>
+                  <span className="text-xs text-[var(--text-secondary)]">
+                    {(config.groqThinking ?? true)
+                      ? "Liga: chat pensa fundo; voz/terminal pensam um pouco (rápido, mas acertam hora/lógica)."
+                      : "Desliga: resposta direta e rápida em todos os canais, sem raciocínio."}
+                  </span>
+                </div>
+              </>
+            )}
+
             <span className="text-sm font-bold text-[var(--text-secondary)] uppercase tracking-wider">Modelo Base:</span>
             <div className="md:col-span-3">
               <CatalogPicker
@@ -609,7 +640,11 @@ export function TabLLM() {
             </div>
             <h3 className="font-bold text-[var(--text-primary)] text-lg tracking-wide">Visão Computacional</h3>
           </div>
-          
+          <p className="text-xs text-[var(--text-muted)] mb-5 relative z-10">
+            O <b>olho da Hana</b>: usado na visão sob demanda (ela ver sua tela na conversa) e no
+            co-piloto (<code>screen_find</code> localiza botões/elementos pra ela clicar). Modelos
+            Gemini apontam coordenadas com precisão — recomendado Gemini 3 Flash.
+          </p>
           <div className="grid grid-cols-1 md:grid-cols-[120px_1fr] gap-6 items-center relative z-10">
             <span className="text-sm font-bold text-[var(--text-secondary)] uppercase tracking-wider">Modelo Vision:</span>
             <div className="w-full md:w-2/3">
@@ -624,6 +659,70 @@ export function TabLLM() {
                 accent="emerald"
                 disabled={availableVisionModels.length === 0}
               />
+            </div>
+          </div>
+        </Card>
+
+        {/* CARD: MODELO DE AGENTE (cérebro econômico) */}
+        <Card hover onMouseEnter={() => audio.playHover()}>
+          <div className="absolute -bottom-10 -right-10 w-40 h-40 bg-amber-500 rounded-full blur-[90px] opacity-10 group-hover:opacity-20 transition-opacity"></div>
+
+          <div className="flex items-center gap-3 mb-3 relative z-10">
+            <div className="w-10 h-10 rounded-xl bg-amber-500/20 border border-amber-500 flex items-center justify-center text-amber-300 shadow-[0_0_15px_rgba(245,158,11,0.2)]">
+              <Bot size={20} />
+            </div>
+            <h3 className="font-bold text-[var(--text-primary)] text-lg tracking-wide">Modelo de Agente</h3>
+          </div>
+          <p className="text-xs text-[var(--text-muted)] mb-5 relative z-10">
+            Cérebro econômico: o chat normal usa o modelo principal (barato). Quando a Hana
+            <b> usa ferramentas</b> (terminal, lembretes, pesquisa), ela troca para este modelo,
+            que costuma ser melhor com ações. Pode até ser de <b>outro provedor</b> (ex: chat no
+            OpenRouter, agente na Groq). Deixe vazio para usar sempre o modelo principal.
+          </p>
+
+          <div className="grid grid-cols-1 md:grid-cols-[120px_1fr] gap-y-5 gap-x-6 items-center relative z-10">
+            <span className="text-sm font-bold text-[var(--text-secondary)] uppercase tracking-wider">Provedor Agente:</span>
+            <div className="relative w-full md:w-2/3">
+              <select
+                className="w-full bg-black/60 border border-[var(--border-strong)] hover:border-amber-500/50 text-[var(--text-primary)] rounded-lg p-2.5 outline-none font-mono text-sm focus:ring-2 focus:ring-amber-500 transition-all cursor-pointer appearance-none shadow-inner"
+                value={config.agentProvider || ""}
+                onChange={(e) => setConfig((prev) => prev && ({ ...prev, agentProvider: e.target.value, agentModel: "" }))}
+              >
+                <option value="">Mesmo do principal ({config.llmProvider.toUpperCase()})</option>
+                {llmProviders.map((p) => <option key={p} value={p}>{p.toUpperCase()}</option>)}
+              </select>
+              <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-amber-400 font-bold">▼</div>
+            </div>
+
+            <span className="text-sm font-bold text-[var(--text-secondary)] uppercase tracking-wider">Modelo Agente:</span>
+            <div className="w-full md:w-2/3">
+              <CatalogPicker
+                value={config.agentModel}
+                options={agentPickerOptions}
+                onChange={(value) => updateField("agentModel", value)}
+                favoriteNamespace={`agent:${agentProvider}`}
+                placeholder="Usar o modelo principal (padrão)"
+                searchPlaceholder="Buscar modelo de agente..."
+                emptyMessage="Nenhum modelo encontrado."
+                accent="blue"
+              />
+            </div>
+
+            <span className="text-sm font-bold text-[var(--text-secondary)] uppercase tracking-wider">Rodadas Tools:</span>
+            <div className="flex items-center gap-3 w-full md:w-2/3">
+              <input
+                type="number" min="0" max="500"
+                className="w-28 bg-black/60 border border-[var(--border-strong)] hover:border-amber-500/50 text-[var(--text-primary)] rounded-lg p-2.5 outline-none font-mono text-sm focus:ring-2 focus:ring-amber-500 transition-all shadow-inner"
+                value={config.agentToolRounds ?? 40}
+                onChange={(e) => {
+                  const parsed = parseInt(e.target.value);
+                  updateField("agentToolRounds", Number.isNaN(parsed) ? 40 : Math.max(0, Math.min(500, parsed)));
+                }}
+              />
+              <span className="text-xs text-[var(--text-muted)]">
+                Máx. de rodadas de ferramentas por turno. <b>0 = sem limite</b> (ela trabalha até terminar).
+                Com limite, se estourar a Hana avisa o que fez e o que faltou (nunca corta no silêncio).
+              </span>
             </div>
           </div>
         </Card>
@@ -696,6 +795,10 @@ export function TabLLM() {
                   className="w-full rounded-lg border border-pink-400/20 bg-black/60 p-2.5 font-mono text-sm text-white outline-none focus:ring-2 focus:ring-pink-500"
                   value={config.ttsVoice}
                   onChange={(event) => updateField("ttsVoice", event.target.value.trim())}
+                  onBlur={(event) => {
+                    const id = event.target.value.trim();
+                    if (id) setRememberedVoices(rememberVoice(config.ttsProvider, id));
+                  }}
                   placeholder="Cole qualquer Voice ID da sua biblioteca ElevenLabs"
                 />
               )}

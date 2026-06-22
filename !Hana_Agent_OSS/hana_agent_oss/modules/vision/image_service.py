@@ -607,7 +607,7 @@ class ImageGenerationService:
                 {
                     "kind": "tool_result",
                     "source": "image_generation",
-                    "displayText": "Acao de imagem cancelada pela Nakamura.",
+                    "displayText": "Acao de imagem cancelada pela Operador.",
                     "speechText": "",
                     "status": "cancelled",
                     "toolName": f"image.{action.get('operation', 'pending')}",

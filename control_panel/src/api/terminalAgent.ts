@@ -25,6 +25,7 @@ const DEFAULT_TERMINAL_AGENT_CONFIG: VoiceConfig = {
   ttsSimilarity: 0.75,
   ttsStyle: 0,
   ttsSpeakerBoost: true,
+  ttsMaxChars: 350,
   speakTerminalEvents: false,
 };
 

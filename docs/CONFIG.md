@@ -18,9 +18,6 @@ HANA_WS_MAX_SIZE=67108864
 HANA_RUNTIME_DB=!Hana_Agent_OSS/runtime/hana_agent_oss.sqlite3
 HANA_MEMORY_DB=!Hana_Agent_OSS/runtime/hana_memory.sqlite3
 HANA_MEMORY_EVENTS=!Hana_Agent_OSS/runtime/hana_events.jsonl
-GROK_BUILD_COMMAND=grok
-GROK_BUILD_DEFAULT_CWD=E:\Projeto_Hana_AI
-GROK_BUILD_TIMEOUT_SECONDS=0
 ```
 
 ## Dependencies
@@ -46,7 +43,6 @@ The Control Panel keeps provider/model preferences through the backend settings 
 - `/api/config/voice/catalog`: planned STT/TTS provider metadata.
 - `/api/config/voice/input-devices`: input-device listing contract.
 - `/api/config/conexoes`: global feature activation, including STT/TTS on/off.
-- `/api/config/grok/status`: status probe for the optional Grok Build CLI bridge.
 
 Free-form chat routes to the selected LLM provider. The active LLM providers
 are `gemini_api`, `openrouter` and `groq`. STT and TTS providers stay separate
@@ -77,8 +73,7 @@ Legacy local settings using `google_platform`, `google_cloud`, `google`,
 Panel state does not hide the Gemini model catalog. Legacy `open_router` and
 `openrouters` values are normalized to `openrouter`. Groq aliases
 `groq_cloud`, `groqcloud` and the spoken shorthand `glock` are normalized to
-`groq`; `grok` is intentionally not an alias because Grok Build is a separate
-code-agent bridge.
+`groq`.
 
 Required environment variables:
 
@@ -111,8 +106,8 @@ XML execution do not run. OpenRouter model capabilities come from the dynamic
 OpenRouter models catalog. Vision/file attachments are sent only to models that
 advertise the matching modality; if a text-only model receives an image, the
 backend returns a clear provider error instead of silently ignoring it. Local
-tools such as Omni and Grok are exposed only when the selected OpenRouter model
-advertises tool-call support and the corresponding bridge is enabled.
+tools such as the terminal hands (`terminal_run`, `terminal_inspect_dir`) and MCP
+are exposed only when the selected OpenRouter model advertises tool-call support.
 
 When `groq` is selected, Gemini-only LLM features are also disabled. Groq models
 use the OpenAI-compatible Chat Completions endpoint at
@@ -158,36 +153,27 @@ voice, microphone, VAD or activation, save `/api/config/voice` or
 `/api/config/conexoes` first, then call runtime start/configure if the UI needs
 an immediate refresh.
 
-Grok Build is configured in Conexoes as a separate code-agent bridge. The
-persisted fields are `grokBuild`, `grokCommand`, `grokDefaultCwd` and
-`grokTimeoutSeconds`. `grokTimeoutSeconds=0` disables automatic timeout.
-`grokCommand` defaults to `grok`, so the bridge works when
-the Grok Build CLI is on `PATH`; if the backend process does not inherit that
-PATH on Windows, it also checks `C:\Users\Nakamura\.grok\bin\grok.exe`. A full
-path can still be saved in Conexoes. The bridge
-runs Grok as a background local subprocess/headless CLI for read-only code inspection and
-planning with `--disable-web-search`, `--no-alt-screen`, `--no-auto-update` and
-plain output. It is not an HTTP provider, does not replace Omni, does not
-replace Tavily MCP for web research, and v1 prompts explicitly block edits,
-commits, formatting, pushes, deletes and credential changes.
+Local PC actions are handled by Hana's in-process "hands" tools (`terminal_run`,
+`terminal_inspect_dir`), gated by the `localHands` toggle in Conexoes. They run
+commands/scripts with a timeout and output cap; destructive actions require user
+confirmation (enforced by the persona rules). There is no separate executor
+service to configure.
 
 ## Agent Jobs
 
-Long Omni and Grok operations run as cancellable background jobs instead of
-blocking the chat/voice turn. The backend exposes:
+The backend keeps a generic background-job system for long-running agent tasks,
+retaining the last 50 finished jobs in the SQLite settings store. The endpoints
+are:
 
 - `GET /api/agent-jobs`
 - `GET /api/agent-jobs/{job_id}`
 - `POST /api/agent-jobs/{job_id}/cancel`
 - `POST /api/agent-jobs/cancel-active`
 
-The runtime keeps one active Grok job and one active Omni job at a time and
-retains the last 50 finished jobs in the SQLite settings store. Active process
-handles stay in memory only; after a backend restart, stale running jobs are
-marked as `failed` with `backend_restarted`. Terminal Agent receives
-`job.started`, progress, `job.done`, `job.failed` and `job.cancelled` events.
-The completion voice notice is intentionally short; full reports stay in the
-Terminal Agent log.
+Active process handles stay in memory only; after a backend restart, stale
+running jobs are marked as `failed` with `backend_restarted`. Terminal Agent
+receives `job.started`, progress, `job.done`, `job.failed` and `job.cancelled`
+events.
 
 Voice-converter config is separate from STT/TTS provider selection:
 
@@ -258,7 +244,7 @@ available. The default FFmpeg path is `C:\Ffmpeg\ffmpeg.exe`; use
 codes.
 
 The Chat do Controle microphone uses the same STT endpoint with
-`respond=false`. The transcript is inserted into the chat text box, so Nakamura
+`respond=false`. The transcript is inserted into the chat text box, so Operador
 can review or edit it before sending. This is a manual browser capture path and
 does not replace the backend always-listening runtime.
 

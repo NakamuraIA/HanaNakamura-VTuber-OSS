@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from typing import Any, Awaitable, Callable
 
 from fastapi import WebSocket
@@ -8,16 +9,30 @@ from fastapi import WebSocket
 from hana_agent_oss.core.protocol import AgentRequest, AgentResponse
 from hana_agent_oss.core.runtime import HanaAgentCore
 from hana_agent_oss.memory.store import MemoryStore
-from hana_agent_oss.modules.attachments import AttachmentStore, attachment_reference_mime_prefixes, attachment_reference_requested
+from hana_agent_oss.modules.attachments import AttachmentStore
 from hana_agent_oss.modules.vision.image_service import ImageGenerationService
 from hana_agent_oss.modules.vision.image_xml import extract_image_xml_actions, strip_image_xml_tags
 from hana_agent_oss.memory.memory_xml import extract_memory_saves, strip_memory_xml_tags
+from hana_agent_oss.tools.skill_tools import apply_skill_notes, strip_skill_xml_tags
 from hana_agent_oss.providers import ProviderRequest, ProviderSelector
+from hana_agent_oss.providers.provider_selector.openrouter.provider import OpenRouterProvider
 from hana_agent_oss.api.services.catalog import DEFAULT_CONNECTIONS, model_supports_vision
-from hana_agent_oss.api.services.unified_history import build_memory_context_block, estimate_tokens
+from hana_agent_oss.api.services.unified_history import build_memory_context_block, estimate_tokens, strip_leaked_terminal_events
 
 
 PROVIDER_SELECTOR = ProviderSelector()
+
+# Safety net: some weaker models occasionally emit a tool call as TEXT instead of
+# doing a real function call (e.g. "<|terminal_run|{...}|>"). That text never runs
+# and confuses the user, so we strip these leaked pseudo-tool tokens from the reply.
+# The real fix is the persona rule + using a tool-capable model; this just keeps the
+# UI clean if it slips through.
+_LEAKED_TOOL_CALL_RE = re.compile(r"<\|\s*\w+.*?\|>", re.DOTALL)
+
+
+def strip_leaked_tool_calls(text: str) -> str:
+    cleaned = _LEAKED_TOOL_CALL_RE.sub("", str(text or ""))
+    return re.sub(r"\n{3,}", "\n\n", cleaned).strip()
 ATTACHMENT_STORE = AttachmentStore()
 LLM_PROVIDER_ALIASES = {
     "google_platform": "gemini_api",
@@ -42,7 +57,7 @@ def response_text(response: AgentResponse) -> str:
         return (
             "Hana Agent OSS esta online como backend central. "
             "O planner deterministico respondeu, mas a conexao LLM/tool-calling completa ainda esta em migracao. "
-            "Comandos estruturados disponiveis: tools, capabilities, file.read, file.write, memory.search, memory.compact e omni.supervise."
+            "Comandos estruturados disponiveis: tools, capabilities, file.read, file.write, memory.search, memory.compact e terminal.run."
         )
     return response.response or response.error or "Falha no Agent Core."
 
@@ -249,6 +264,11 @@ def provider_uses_gemini_only_features(provider: str) -> bool:
     return normalize_llm_provider(provider) == "gemini_api"
 
 
+def provider_supports_native_search(provider: str) -> bool:
+    """Providers with built-in web search: Gemini (grounding) and OpenRouter (web plugin)."""
+    return normalize_llm_provider(provider) in {"gemini_api", "openrouter"}
+
+
 def message_history(payload: dict[str, Any], text: str) -> list[dict[str, str]]:
     history = payload.get("history")
     messages: list[dict[str, str]] = []
@@ -270,19 +290,23 @@ def message_history(payload: dict[str, Any], text: str) -> list[dict[str, str]]:
 
 
 def resolve_chat_attachments(payload: dict[str, Any], *, memory: MemoryStore, text: str, channel: str = "control_center") -> list[dict[str, Any]]:
-    """Persist new attachments or recover recent attachments for follow-up questions."""
+    """Persist attachments the user actually uploaded this turn.
 
+    IMPORTANT: there is NO keyword-based attachment recovery. The user explicitly
+    forbids word triggers (e.g. typing "arquivo"/"áudio"/"imagem" must NEVER pull a
+    stored media file into the turn — that used to break text-only turns). Attachments
+    enter a turn ONLY when really uploaded in the payload. Any future "reuse last
+    attachment" feature must be driven by an explicit tag/regex, not by words.
+    """
     attachments = payload.get("attachments") if isinstance(payload.get("attachments"), list) else []
     if attachments:
         return ATTACHMENT_STORE.save_many(attachments, memory=memory, channel=channel, user_text=text)
-    if attachment_reference_requested(text):
-        return ATTACHMENT_STORE.recent(
-            memory,
-            channel=channel,
-            limit=3,
-            mime_prefixes=attachment_reference_mime_prefixes(text),
-        )
     return []
+
+
+# Providers OpenAI-compativeis que sobem tokens via generate_stream (streaming real).
+# Gemini fica de fora (entrega o texto inteiro de uma vez).
+STREAMING_PROVIDERS = frozenset({"openrouter", "groq", "deepseek"})
 
 
 async def handle_chat_payload(websocket: WebSocket, payload: dict[str, Any], *, core: HanaAgentCore, memory: MemoryStore) -> None:
@@ -295,7 +319,7 @@ async def handle_chat_payload(websocket: WebSocket, payload: dict[str, Any], *, 
 
     # OpenRouter streams token deltas live; other providers return the full text in one shot
     # (the frontend still animates it letter-by-letter).
-    use_stream = provider == "openrouter" and not is_agent_core
+    use_stream = provider in STREAMING_PROVIDERS and not is_agent_core
 
     async def on_delta(token: str) -> None:
         await websocket.send_json({"type": "chunk", "content": token})
@@ -353,6 +377,7 @@ async def run_text_turn(
     model = str(payload.get("model") or "structured-planner")
     safety_mode = str(payload.get("safety_mode") or "safe")
     channel = str(payload.get("channel") or "control_center")
+    call_mode = bool(payload.get("call_mode", False))
     resolved_attachments = resolve_chat_attachments(payload, memory=memory, text=text, channel=channel)
 
     # Truncate very large text (e.g. user sending long articles/news to "read"/process directly,
@@ -505,36 +530,84 @@ async def run_text_turn(
         # what was injected so the Control Panel can show it.
         chat_messages = message_history(payload, text)
         injected_memories: list[dict[str, Any]] = []
+        memory_block = ""
         try:
             memory_block, injected_memories = build_memory_context_block(memory, query=text)
             if memory_block:
                 chat_messages.insert(0, {"role": "system", "content": memory_block})
         except Exception:
             injected_memories = []
+
+        # === Live context meter (anti-cegueira) ===
+        # Measure where the turn's tokens actually go, so Operador/we stop guessing.
+        # Pure measurement: never changes what is sent. Emitted to the terminal + meta.
+        context_report: dict[str, Any] = {}
+        try:
+            from hana_agent_oss.api.services.unified_history import (
+                context_size_report,
+                estimate_image_tokens,
+            )
+            from hana_agent_oss.persona import build_provider_system_prompt
+            from hana_agent_oss.api.services.terminal_agent import append_terminal_event
+
+            history_text = "\n".join(str(m.get("content") or "") for m in chat_messages if m.get("role") != "system")
+            context_report = context_size_report(
+                {
+                    "persona+skills": build_provider_system_prompt(provider),
+                    "memoria": memory_block,
+                    "historico": history_text,
+                },
+                image_tokens=estimate_image_tokens(resolved_attachments),
+            )
+            append_terminal_event(
+                memory,
+                {
+                    "kind": "context_audit",
+                    "source": "context_meter",
+                    "speechText": "",
+                    "displayText": context_report.get("summary", ""),
+                    "status": "info",
+                    "toolName": "context.meter",
+                    "metadata": {"tts": False, "contextReport": context_report},
+                },
+            )
+        except Exception:
+            context_report = {}
+        # Groq "thinker" switch (GUI toggle): honored from the payload first, else the
+        # persisted llm_config. Voice/terminal still auto-disable thinking regardless.
+        _llm_cfg = memory.get_setting("llm_config", {})
+        groq_thinking = payload.get("groqThinking")
+        if groq_thinking is None:
+            groq_thinking = _llm_cfg.get("groqThinking", True) if isinstance(_llm_cfg, dict) else True
         llm_request = ProviderRequest(
             provider=provider,
             model=model,
             messages=chat_messages,
             temperature=float(payload.get("temperature") or 0.7),
-            native_search_mode=str(payload.get("native_search_mode") or "auto") if provider_uses_gemini_only_features(provider) else "off",
+            native_search_mode=str(payload.get("native_search_mode") or "auto") if provider_supports_native_search(provider) else "off",
             channel=channel,
+            call_mode=call_mode,
             attachments=resolved_attachments,
             media_output_path=media_output_path,
             memory=memory,
             openrouter_routing=dict(payload.get("openrouter_routing") or {}) if provider == "openrouter" else {},
             on_activity=on_activity,
+            thinking=bool(groq_thinking),
         )
         streamed = False
-        if on_delta is not None and provider == "openrouter":
+        stream_provider = (
+            OpenRouterProvider._provider_for(provider)
+            if (on_delta is not None and provider in STREAMING_PROVIDERS)
+            else None
+        )
+        if stream_provider is not None:
             # Live token streaming path: push deltas as they arrive, accumulate the full
-            # raw text, then post-process exactly like the blocking path below.
-            from hana_agent_oss.providers.provider_selector.openrouter.provider import OpenRouterProvider
-
+            # raw text, then post-process exactly like the blocking path below. Works for
+            # qualquer provider OpenAI-compat (OpenRouter, Groq, DeepSeek).
             llm_request.streaming = True
-            openrouter_provider = OpenRouterProvider()
             parts: list[str] = []
             try:
-                async for token in openrouter_provider.generate_stream(llm_request):
+                async for token in stream_provider.generate_stream(llm_request):
                     if not token:
                         continue
                     parts.append(token)
@@ -546,9 +619,16 @@ async def run_text_turn(
             stream_error = raw_text.strip().startswith("[ERRO:")
             llm_ok = bool(raw_text.strip()) and not stream_error
             llm_error = raw_text.strip() if stream_error else None
-            llm_meta: dict[str, Any] = {"provider": "openrouter", "model": model, "nativeSearch": False}
+            llm_meta: dict[str, Any] = {"provider": provider, "model": model, "nativeSearch": False}
         else:
             llm_response = await asyncio.to_thread(PROVIDER_SELECTOR.generate, llm_request)
+            # Reasoning models (qwen3, gpt-oss) intermittently return an empty `content`
+            # (the answer landed only in the reasoning field, or a malformed first pass)
+            # and the turn looks like a dead provider even though tokens WERE generated
+            # and telemetry fired. Proven recoverable: the very next identical call works.
+            # So instead of failing on her screen/TTS, just retry the blocking call once.
+            if (not llm_response.ok) and str(llm_response.error or "") == "empty_provider_response":
+                llm_response = await asyncio.to_thread(PROVIDER_SELECTOR.generate, llm_request)
             raw_text = llm_response.text
             llm_ok = llm_response.ok
             llm_error = llm_response.error
@@ -585,16 +665,44 @@ async def run_text_turn(
             except Exception:
                 pass  # Never break a turn because memory save failed
 
+        # === Living skills: Hana annotates her own skill .md via <anotar_skill> ===
+        # Notes are scoped/capped and silently applied; never spoken or shown.
+        apply_skill_notes(raw_text)
+
         cleaned_text = strip_image_xml_tags(raw_text)
         cleaned_text = strip_memory_xml_tags(cleaned_text)
+        cleaned_text = strip_skill_xml_tags(cleaned_text)
+        cleaned_text = strip_leaked_tool_calls(cleaned_text)
+        # Cut any leaked terminal/system event text the model parroted from the running
+        # transcript (e.g. "PTT pressionado. Gravando do microfone..."). Otherwise it
+        # gets spoken by TTS and saved, re-polluting future turns.
+        cleaned_text = strip_leaked_terminal_events(cleaned_text)
+        # Defense vs reasoning-model chain-of-thought leaking into chat/TTS: strip any
+        # <think>...</think> block (some reasoning models emit it inline in content).
+        import re as _re
+        cleaned_text = _re.sub(r"(?is)<think>.*?</think>", " ", cleaned_text).strip()
+        cleaned_text = _re.sub(r"(?is)^\s*<think>.*$", " ", cleaned_text).strip()  # unclosed think
+        # Voice/terminal are PLAIN-TEXT channels: weak models ignore the "no markdown"
+        # rule and emit tables/headers/bold that look wrong in the terminal and become
+        # TTS garbage. Force clean prose here regardless of the model (chat/discord-text
+        # keep their rich markdown).
+        if channel in {"voice", "terminal_agent"} or call_mode:
+            from hana_agent_oss.modules.voice.tts_readable import plainify_for_voice
+            cleaned_text = plainify_for_voice(cleaned_text)
         meta = {
             "provider": provider,
             "model": model,
             "agent": "hana-agent-oss",
             "safetyMode": safety_mode,
-            "nativeSearchMode": payload.get("native_search_mode") if provider_uses_gemini_only_features(provider) else "off",
+            "nativeSearchMode": payload.get("native_search_mode") if provider_supports_native_search(provider) else "off",
             "nativeSearch": bool(llm_meta.get("nativeSearch")),
         }
+        if context_report:
+            meta["contextReport"] = context_report
+        if llm_meta.get("servedProvider"):
+            meta["servedProvider"] = llm_meta["servedProvider"]
+        if llm_meta.get("speedTokensPerSec"):
+            meta["speedTokensPerSec"] = llm_meta["speedTokensPerSec"]
         if llm_meta and "grounding" in llm_meta:
             meta["grounding"] = llm_meta["grounding"]
         # Surface which persistent memories were actually fed to the LLM this turn,
@@ -645,14 +753,14 @@ async def run_text_turn(
                 status["detail"] = "Imagem XML processada."
         else:
             is_attachment_error = "attachment_type_not_supported" in str(llm_error or "")
-            final_text = (
-                f"O provider {provider} nao aceita o tipo de anexo recuperado nesta mensagem: {llm_error}."
-                if is_attachment_error
-                else (
-                    f"Provider {provider} nao conectado: {llm_error}. "
-                    "Configure a chave/credencial e instale as dependencias opcionais de providers para usar este cerebro."
-                )
-            )
+            # Never dump the raw provider error onto her screen / into TTS. The technical
+            # detail still goes to meta["providerError"] + the terminal log + memory below,
+            # so the panel can debug it; but what she SEES/HEARS is a short in-character
+            # line, not "Provider groq nao conectado: empty_provider_response...".
+            if is_attachment_error:
+                final_text = "Nao consegui ler esse anexo aqui, Naka — manda de outro jeito que eu olho."
+            else:
+                final_text = "Deu um tropeco no cerebro agora, Naka. Repete pra mim que eu pego de novo."
             if llm_ok and image_errors:
                 final_text = cleaned_text or "Falha ao gerar imagem."
             meta["providerError"] = llm_error or (image_errors[0] if image_errors else "provider_error")

@@ -20,14 +20,12 @@ from hana_agent_oss.providers.provider_selector.openrouter.catalog import (
 )
 # Image provider integration: image XML tool instructions for all LLM providers.
 from hana_agent_oss.modules.vision.image_provider import normalize_image_provider
-from hana_agent_oss.api.services.agent_jobs import agent_job_cancel as run_agent_job_cancel, get_agent_job_manager
 from hana_agent_oss.tools.mcp_provider_tools import extract_sources_from_mcp, mcp_openai_runners, mcp_openai_schemas
-from hana_agent_oss.tools.omni_tools import omni_supervise as run_omni_supervise
 
 
 OPENROUTER_CHAT_COMPLETIONS_URL = f"{OPENROUTER_BASE_URL}/chat/completions"
-OPENROUTER_HTTP_TIMEOUT_SECONDS = 120
-OPENROUTER_TOOL_ROUNDS = 5
+OPENROUTER_HTTP_TIMEOUT_SECONDS = 300
+OPENROUTER_TOOL_ROUNDS = 20
 SUPPORTED_TEXT_ATTACHMENT_TYPES = {
     "text/plain",
     "text/markdown",
@@ -95,6 +93,21 @@ class OpenRouterProvider:
             payload_base["tools"] = tools
             payload_base["tool_choice"] = "auto"
 
+        # Groq "thinker": disable reasoning when the user turned it off OR on the
+        # low-latency channels. Only for Groq (OpenRouter uses a different `reasoning`
+        # mechanism and would reject reasoning_effort). Streaming posts to the real API,
+        # so this is the actual field, not an internal hint.
+        if self.provider_id == "groq":
+            model_id = str(model or "").lower()
+            is_reasoning = any(tag in model_id for tag in ("qwen3", "qwen/qwen3", "gpt-oss", "deepseek-r1", "-r1"))
+            channel = str(getattr(request, "channel", "") or "").strip().lower()
+            thinking_enabled = bool(getattr(request, "thinking", True))
+            if is_reasoning:
+                if not thinking_enabled:
+                    payload_base["reasoning_effort"] = "none"
+                elif channel in {"voice", "terminal_agent"}:
+                    payload_base["reasoning_effort"] = "low"
+
         body = json.dumps(payload_base).encode("utf-8")
         req = urllib.request.Request(
             self.chat_completions_url,
@@ -159,16 +172,40 @@ class OpenRouterProvider:
                     response.close()
                 except Exception:
                     pass
+                # Cérebro econômico: cheap model streams the chat; the moment a real
+                # tool call happens, escalate the tool rounds to the configured agent
+                # model (better at tool-calling). The agent can even live on a different
+                # provider than the chat (e.g. chat on OpenRouter, tools on Groq).
+                # Pure-chat turns stay on the cheap model/provider.
+                agent_provider, agent_model = self._agent_target(request.memory)
+                tool_provider = self
+                tool_model = agent_model or model
+                if agent_provider and agent_provider != self.provider_id:
+                    candidate = self._provider_for(agent_provider)
+                    # Only switch when the target provider exists AND its credentials
+                    # are present; otherwise fall back to the main provider/model so a
+                    # missing key never breaks the whole turn.
+                    if candidate is not None and os.environ.get(candidate.api_key_env):
+                        tool_provider = candidate
+                        tool_model = agent_model or candidate.default_model
+                    else:
+                        tool_model = model
                 if request.on_activity is not None:
+                    detail = "Executando pesquisas e ações antes da resposta final."
+                    switched_provider = tool_provider is not self
+                    if switched_provider:
+                        detail = f"Usando o agente ({tool_provider.provider_label}: {tool_model}) para as ferramentas."
+                    elif agent_model and agent_model != model:
+                        detail = f"Usando o modelo de agente ({agent_model}) para as ferramentas."
                     await request.on_activity({
                         "event": "tools_started",
                         "label": "Hana está usando ferramentas",
-                        "detail": "Executando pesquisas e ações antes da resposta final.",
+                        "detail": detail,
                     })
                 full_response = await loop.run_in_executor(
                     None,
-                    lambda: self._run_completion_loop(
-                        model=model,
+                    lambda: tool_provider._run_completion_loop(
+                        model=tool_model,
                         messages=messages,
                         temperature=request.temperature,
                         plugins=plugins,
@@ -177,6 +214,8 @@ class OpenRouterProvider:
                         memory=request.memory,
                         tool_runs=request.tool_runs,
                         provider_routing=request.openrouter_routing,
+                        channel=getattr(request, "channel", ""),
+                        thinking=getattr(request, "thinking", True),
                     ),
                 )
                 final_text = self._response_text(full_response)
@@ -190,6 +229,15 @@ class OpenRouterProvider:
                 if final_text:
                     yield final_text
                 return
+        except urllib.error.HTTPError as exc:
+            # Surface the real OpenRouter error body (it explains WHY: e.g. "no
+            # endpoints support tool use", bad schema). The generic "HTTP 400" alone
+            # is useless for debugging tool-call failures.
+            try:
+                detail = exc.read().decode("utf-8", errors="replace") if exc.fp else ""
+            except Exception:
+                detail = ""
+            yield f"[ERRO: {self.provider_id}_http_{exc.code}:{detail[:600] or exc.reason}]"
         except Exception as exc:
             yield f"[ERRO: {exc}]"
 
@@ -227,6 +275,8 @@ class OpenRouterProvider:
             "capabilities": self._capabilities_payload(model_info),
         }
 
+        import time as _time
+        _started = _time.perf_counter()
         try:
             response_data = self._run_completion_loop(
                 model=model,
@@ -238,6 +288,8 @@ class OpenRouterProvider:
                 memory=request.memory,
                 tool_runs=request.tool_runs,
                 provider_routing=request.openrouter_routing,
+                channel=getattr(request, "channel", ""),
+                thinking=getattr(request, "thinking", True),
             )
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace") if exc.fp else str(exc)
@@ -248,11 +300,51 @@ class OpenRouterProvider:
             return ProviderResponse(ok=False, error=f"{self.provider_id}_provider_error:{exc}", meta=meta)
 
         text = self._response_text(response_data)
+        elapsed = max(0.001, _time.perf_counter() - _started)
         usage = response_data.get("usage") if isinstance(response_data, dict) else None
+        completion_tokens = 0
         if isinstance(usage, dict):
             meta["usage"] = usage
             if "total_tokens" in usage:
                 meta["tokens"] = usage.get("total_tokens")
+            completion_tokens = int(usage.get("completion_tokens") or 0)
+
+        # Visibility: which upstream actually served this turn (so a silent fallback
+        # is never invisible again) + the real generation speed in tok/s.
+        served = response_data.get("provider") if isinstance(response_data, dict) else None
+        if served:
+            meta["servedProvider"] = str(served)
+        if completion_tokens:
+            meta["speedTokensPerSec"] = round(completion_tokens / elapsed, 1)
+        # Reasoning models bill their hidden chain-of-thought as completion tokens. When
+        # the model "thinks" thousands of tokens to say one line, THAT is the real voice
+        # latency — not the network/provider. Surface it so a slow turn is self-explaining.
+        reasoning_tokens = 0
+        if isinstance(usage, dict):
+            details = usage.get("completion_tokens_details")
+            if isinstance(details, dict):
+                reasoning_tokens = int(details.get("reasoning_tokens") or 0)
+        if reasoning_tokens:
+            meta["reasoningTokens"] = reasoning_tokens
+        self._append_terminal_event(
+            request.memory,
+            kind="provider_telemetry",
+            source=self.provider_id,
+            status="info",
+            tool_name="provider.telemetry",
+            display_text=(
+                f"⚡ {model} · {served or 'auto'}"
+                + (f" · {meta['speedTokensPerSec']} tok/s" if completion_tokens else "")
+                + (f" · 🧠 {reasoning_tokens} pensados" if reasoning_tokens else "")
+                + f" · {elapsed:.1f}s"
+            ),
+            metadata={
+                "servedProvider": served,
+                "speedTokensPerSec": meta.get("speedTokensPerSec"),
+                "reasoningTokens": reasoning_tokens or None,
+                "elapsedSec": round(elapsed, 2),
+            },
+        )
 
         return ProviderResponse(
             ok=bool(text),
@@ -271,13 +363,13 @@ class OpenRouterProvider:
     ) -> str:
         """Build provider-specific instructions without Gemini-only image XML rules."""
         base = build_provider_system_prompt(self.provider_id)
-        style = channel_style_hint(request.channel)
+        style = channel_style_hint(request.channel, call_mode=getattr(request, "call_mode", False))
         capabilities = self._capabilities_payload(model_info)
         capability_hint = (
             f"\n\n[{self.provider_status_title}]\n"
             f"You are running through {self.provider_label}, not direct Gemini API.\n"
             "Do not use Gemini Google Search, Gemini Code Execution, Gemini URL Context, or Gemini server-side tools.\n"
-            "Only use actual tool calls provided in this request. Never write pseudo calls such as omni_supervise(...) as visible text.\n"
+            "Only use actual tool calls provided in this request. Never write pseudo calls such as terminal_run(...) as visible text.\n"
             f"Current model capabilities: vision={capabilities['supports_image']}, files={capabilities['supports_pdf']}, tools={capabilities['supports_function_calling']}.\n"
             "When user sends large text (e.g. news, articles) to 'read' or process directly: just acknowledge internally and respond based on content if relevant. Do NOT output image prompts, XML tags, or unrelated generations. Process as normal conversation input."
         )
@@ -448,7 +540,10 @@ class OpenRouterProvider:
                 parts.append({"type": "text", "text": f"\n\n[Attachment: {filename}]\n{text[:200000]}"})
                 continue
 
-            raise ValueError(f"{self.provider_id}_attachment_type_not_supported:{mime_type}")
+            # Unsupported attachment type (e.g. an auto-recovered audio/mpeg on a
+            # text-only model): skip it gracefully instead of breaking the whole
+            # turn. The text message still goes through.
+            continue
 
         return parts, plugins
 
@@ -485,6 +580,11 @@ class OpenRouterProvider:
         if not messages and attachment_parts:
             messages.append({"role": "user", "content": [{"type": "text", "text": "Analise os anexos enviados."}, *attachment_parts]})
 
+        # Native web search via the OpenRouter "web" plugin (works on any model,
+        # billed per search). Mirrors the Gemini native-search toggle in the chat.
+        if self.supports_plugins and str(request.native_search_mode or "off").lower() in {"auto", "force"}:
+            plugins.append({"id": "web", "max_results": 5})
+
         return messages, plugins
 
     @staticmethod
@@ -506,6 +606,67 @@ class OpenRouterProvider:
             return int(value)
         except (TypeError, ValueError):
             return default
+
+    def _tool_rounds_limit(self, memory: Any) -> int:
+        """Tool-round budget for one turn, configurable via llm_config.agentToolRounds.
+
+        0 means unlimited (the agent works until the model stops calling tools).
+        Falls back to the class default. Configurable because a hard low cap makes the
+        agent silently die mid-task; Operador tunes this from the panel.
+        """
+        try:
+            cfg = memory.get_setting("llm_config", {}) or {}
+            raw = cfg.get("agentToolRounds")
+            if raw is not None:
+                rounds = int(raw)
+                if rounds <= 0:
+                    return 0  # unlimited
+                return min(500, rounds)
+        except Exception:
+            pass
+        return self.tool_rounds
+
+    @staticmethod
+    def _agent_target(memory: Any) -> tuple[str, str]:
+        """Optional provider+model used only for tool-execution rounds (cérebro econômico).
+
+        Returns ``(agent_provider, agent_model)``. Either may be empty: an empty
+        provider means "stay on the main provider", an empty model means "use that
+        provider's default model". This lets the chat run on a cheap model/provider
+        and escalate the tool rounds to a stronger one (even a different provider,
+        e.g. main on OpenRouter and agent on Groq).
+        """
+        if memory is None:
+            return "", ""
+        try:
+            cfg = memory.get_setting("llm_config", {}) or {}
+            return (
+                str(cfg.get("agentProvider") or "").strip().lower(),
+                str(cfg.get("agentModel") or "").strip(),
+            )
+        except Exception:
+            return "", ""
+
+    @staticmethod
+    def _provider_for(provider_id: str) -> "OpenRouterProvider | None":
+        """Return an OpenAI-compatible provider instance for the agent tool loop.
+
+        Only OpenAI-compatible providers (OpenRouter, Groq) share ``_run_completion_loop``
+        and the message/tool schema built here, so those are the only valid agent
+        targets. Anything else (e.g. gemini_api) returns None → caller keeps the main
+        provider.
+        """
+        pid = str(provider_id or "").strip().lower()
+        if pid in ("openrouter", "open_router", "openrouters"):
+            from hana_agent_oss.providers.provider_selector.openrouter.provider import OpenRouterProvider
+            return OpenRouterProvider()
+        if pid in ("groq", "groqcloud", "groq_cloud", "glock"):
+            from hana_agent_oss.providers.provider_selector.groq.provider import GroqProvider
+            return GroqProvider()
+        if pid in ("deepseek", "deepseek_official", "deep_seek"):
+            from hana_agent_oss.providers.provider_selector.deepseek.provider import DeepSeekProvider
+            return DeepSeekProvider()
+        return None
 
     @staticmethod
     def _tool_arguments(value: Any) -> dict[str, Any]:
@@ -581,8 +742,8 @@ class OpenRouterProvider:
             return
 
     def _tool_schemas_and_runners(self, request: ProviderRequest, *, supports_tools: bool) -> tuple[list[dict[str, Any]], dict[str, Callable[[dict[str, Any]], dict[str, Any]]]]:
-        """Expose Omni local tools only when config and model capabilities allow it.
-        MC tools are forced in if controller enabled (to support cases where catalog under-reports supportsTools, e.g. Groq gpt-oss models).
+        """Expose MCP + local hands tools when model capabilities allow it.
+        Tools are skipped entirely for models the catalog reports as not supporting tool calls.
         """
         connections = {}
         if request.memory is not None:
@@ -593,72 +754,567 @@ class OpenRouterProvider:
             except Exception:
                 connections = {}
 
+        if not getattr(request, "allow_tools", True):
+            return [], {}
+
         tools: list[dict[str, Any]] = []
         runners: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {}
         tools.extend(mcp_openai_schemas())
         # tool_runs are captured centrally in _run_completion_loop (covers every tool),
         # so the MCP runner does not need its own collector here (avoids double-count).
         runners.update(mcp_openai_runners(request.memory))
-        local_agent_enabled = False
 
         if not supports_tools:
             return [], {}
 
-        if bool(connections.get("omni")):
-            omni_url = str(connections.get("omniUrl") or "").strip()
-            tools.append(self._omni_schema())
-            local_agent_enabled = True
+        # === Hana's local hands (lean in-process executor; replaces Omni) ===
+        # Added last so it never disturbs the leading tool bundle order.
+        if bool(connections.get("localHands", True)):
+            from hana_agent_oss.tools.terminal_tools import (
+                inspect_dir as _terminal_inspect_dir,
+                run_command as _terminal_run_command,
+            )
 
-            def run_omni(args: dict[str, Any]) -> dict[str, Any]:
-                normalized = {
-                    "task": str(args.get("task") or "").strip(),
-                    "mode": str(args.get("mode") or "inspect").strip().lower(),
-                    "acceptance": str(args.get("acceptance") or "").strip(),
-                    "max_rounds": self._safe_int(args.get("max_rounds") or 3, 3),
-                    "base_url": omni_url,
-                    "_background_job": True,
-                }
+            tools.append({
+                "type": "function",
+                "function": {
+                    "name": "terminal_run",
+                    "description": (
+                        "Roda um comando no PC da Operador (Windows). Tem timeout e limite de saída. "
+                        "Use shell='powershell' p/ PowerShell. ANTES de ações perigosas (deletar, formatar, "
+                        "admin, mexer em credenciais/.env): investigue, mostre o que vai fazer e confirme com a usuária."
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "required": ["command"],
+                        "properties": {
+                            "command": {"type": "string", "description": "Comando a executar"},
+                            "cwd": {"type": "string", "description": "Pasta de trabalho (opcional)"},
+                            "shell": {"type": "string", "enum": ["cmd", "powershell", "bash"]},
+                            "timeout": {"type": "integer", "description": "Segundos até interromper (padrão 60, máx 600)"},
+                        },
+                    },
+                },
+            })
+            tools.append({
+                "type": "function",
+                "function": {
+                    "name": "terminal_inspect_dir",
+                    "description": "Lista o conteúdo de uma pasta (um nível) para inspeção rápida.",
+                    "parameters": {
+                        "type": "object",
+                        "required": ["path"],
+                        "properties": {"path": {"type": "string", "description": "Caminho da pasta"}},
+                    },
+                },
+            })
+
+            def run_terminal(args: dict[str, Any]) -> dict[str, Any]:
+                command = str(args.get("command") or "").strip()
                 self._append_terminal_event(
                     request.memory,
                     kind="tool_call",
-                    source="omni_bridge",
+                    source="local_hands",
                     status="running",
-                    tool_name="omni.supervise",
-                    display_text=f"Delegando tarefa ao Omni ({normalized['mode']}): {normalized['task'][:240]}",
-                    metadata={"mode": normalized["mode"]},
+                    tool_name="terminal.run",
+                    display_text=f"Rodando: {command[:240]}",
+                    metadata={"shell": str(args.get("shell") or "")},
                 )
-                result = run_omni_supervise(normalized)
+                result = _terminal_run_command(args)
                 result_dict = result.to_dict()
                 self._append_terminal_event(
                     request.memory,
                     kind="tool_result",
-                    source="omni_bridge",
+                    source="local_hands",
                     status="success" if result.ok else "failed",
-                    tool_name="omni.supervise",
-                    display_text=str(result.output.get("response") or result.output.get("message") or result.error or "Omni job iniciado."),
-                    metadata={"mode": normalized["mode"], "toolResult": result_dict},
+                    tool_name="terminal.run",
+                    display_text=str(result.output.get("stdout") or result.error or "Comando finalizado."),
+                    metadata={"toolResult": result_dict},
                 )
                 return result_dict
 
-            runners["omni_supervise"] = run_omni
+            def run_inspect(args: dict[str, Any]) -> dict[str, Any]:
+                return _terminal_inspect_dir(args).to_dict()
 
-        manager = get_agent_job_manager()
-        has_active_agent_job = bool(manager and [job for job in manager.list_jobs() if job.get("status") in {"queued", "running"}])
-        if local_agent_enabled or has_active_agent_job:
-            tools.append(self._agent_job_cancel_schema())
+            runners["terminal_run"] = run_terminal
+            runners["terminal_inspect_dir"] = run_inspect
 
-            def run_agent_cancel(args: dict[str, Any]) -> dict[str, Any]:
-                result = run_agent_job_cancel(
-                    {
-                        "job_id": str(args.get("job_id") or "").strip(),
-                        "agent": str(args.get("agent") or "").strip().lower(),
-                        "active": bool(args.get("active", True)),
-                        "reason": str(args.get("reason") or "user_request").strip() or "user_request",
-                    }
+            # === File read/write (atomic, UTF-8) ===
+            # Writing code/text via the terminal (PowerShell here-strings) corrupts content:
+            # it eats $variables, turns backticks into escapes, mangles accents (mojibake) and
+            # blows up on large files (WinError 206). These tools take the content as a plain
+            # JSON argument, so there is no shell escaping at all — one clean write.
+            from hana_agent_oss.tools.file_tools import (
+                file_exists as _file_exists,
+                file_read as _file_read,
+                file_write as _file_write,
+            )
+
+            tools.append({
+                "type": "function",
+                "function": {
+                    "name": "file_write",
+                    "description": (
+                        "Cria ou sobrescreve um arquivo de texto/código com o conteúdo EXATO informado "
+                        "(UTF-8, cria as pastas automaticamente). USE ISTO para escrever HTML/CSS/JS/Python/etc — "
+                        "NUNCA jogue código pelo terminal_run com here-string (@\"...\"@), pois isso corrompe "
+                        "variáveis $, crases e acentos. Uma chamada basta por arquivo."
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "required": ["path", "content"],
+                        "properties": {
+                            "path": {"type": "string", "description": "Caminho completo do arquivo"},
+                            "content": {"type": "string", "description": "Conteúdo completo do arquivo"},
+                        },
+                    },
+                },
+            })
+            tools.append({
+                "type": "function",
+                "function": {
+                    "name": "file_read",
+                    "description": "Lê um arquivo de texto e retorna o conteúdo (UTF-8).",
+                    "parameters": {
+                        "type": "object",
+                        "required": ["path"],
+                        "properties": {"path": {"type": "string", "description": "Caminho do arquivo"}},
+                    },
+                },
+            })
+            tools.append({
+                "type": "function",
+                "function": {
+                    "name": "file_exists",
+                    "description": "Verifica se um caminho existe (arquivo ou pasta).",
+                    "parameters": {
+                        "type": "object",
+                        "required": ["path"],
+                        "properties": {"path": {"type": "string", "description": "Caminho a verificar"}},
+                    },
+                },
+            })
+
+            def run_file_write(args: dict[str, Any]) -> dict[str, Any]:
+                path = str(args.get("path") or "").strip()
+                self._append_terminal_event(
+                    request.memory,
+                    kind="tool_call",
+                    source="local_hands",
+                    status="running",
+                    tool_name="file.write",
+                    display_text=f"Escrevendo arquivo: {path[:240]}",
+                    metadata={},
                 )
-                return result.to_dict()
+                result = _file_write(args)
+                result_dict = result.to_dict()
+                self._append_terminal_event(
+                    request.memory,
+                    kind="tool_result",
+                    source="local_hands",
+                    status="success" if result.ok else "failed",
+                    tool_name="file.write",
+                    display_text=(f"Arquivo salvo: {path}" if result.ok else (result.error or "Falha ao escrever.")),
+                    metadata={"toolResult": result_dict},
+                )
+                return result_dict
 
-            runners["agent_job_cancel"] = run_agent_cancel
+            runners["file_write"] = run_file_write
+            runners["file_read"] = lambda args: _file_read(args).to_dict()
+            runners["file_exists"] = lambda args: _file_exists(args).to_dict()
+
+            # === Co-piloto: digitar pela Operador (teclado real) ===
+            from hana_agent_oss.tools.keyboard_tools import keyboard_type as _keyboard_type
+
+            tools.append({
+                "type": "function",
+                "function": {
+                    "name": "keyboard_type",
+                    "description": (
+                        "Digita um texto NO TECLADO de verdade, letra por letra, dentro do campo que a "
+                        "Operador deixou focado/clicado na tela dela (caixa de resposta, formulário, editor). "
+                        "Use quando ela pedir 'digita pra mim', 'responde essa pergunta aí', 'escreve isso'. "
+                        "Suporta acentos e pontuação. Quebras de linha (\\n): newline_mode='space' (padrão, vira espaço), "
+                        "'shift_enter' (quebra linha SEM enviar — use para texto multilinha em chats/editores) ou "
+                        "'enter' (Enter real — ENVIA formulários, só se a Operador mandar enviar). "
+                        "Ela pode apertar ESC para abortar a digitação."
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "required": ["text"],
+                        "properties": {
+                            "text": {"type": "string", "description": "Texto exato a digitar"},
+                            "cps": {"type": "number", "description": "Velocidade em caracteres/segundo (padrão 40)"},
+                            "newline_mode": {"type": "string", "enum": ["space", "shift_enter", "enter"], "description": "Como digitar \\n (padrão space)"},
+                            "start_delay": {"type": "number", "description": "Segundos de espera antes de começar (padrão 1.2)"},
+                        },
+                    },
+                },
+            })
+
+            def run_keyboard_type(args: dict[str, Any]) -> dict[str, Any]:
+                preview = str(args.get("text") or "")[:120]
+                self._append_terminal_event(
+                    request.memory,
+                    kind="tool_call",
+                    source="local_hands",
+                    status="running",
+                    tool_name="keyboard.type",
+                    display_text=f"Digitando pela Operador: {preview}...",
+                    metadata={},
+                )
+                result = _keyboard_type(args)
+                result_dict = result.to_dict()
+                typed = (result.output or {}).get("typed_chars", 0)
+                self._append_terminal_event(
+                    request.memory,
+                    kind="tool_result",
+                    source="local_hands",
+                    status="success" if result.ok else "failed",
+                    tool_name="keyboard.type",
+                    display_text=(f"Digitei {typed} caracteres." if result.ok else (result.error or "Falha ao digitar.")),
+                    metadata={"toolResult": result_dict},
+                )
+                return result_dict
+
+            runners["keyboard_type"] = run_keyboard_type
+
+            # === Co-piloto: mouse + olho (visão aponta, mouse clica) ===
+            from hana_agent_oss.tools.mouse_tools import (
+                mouse_click as _mouse_click,
+                mouse_scroll as _mouse_scroll,
+                screen_find as _screen_find,
+            )
+
+            tools.append({
+                "type": "function",
+                "function": {
+                    "name": "screen_find",
+                    "description": (
+                        "OLHO do co-piloto: tira um print do monitor ativo e pergunta ao modelo de visão "
+                        "ONDE está um elemento (botão, X de fechar, campo, link). Retorna JSON com x/y "
+                        "normalizados 0-1000 prontos para usar em mouse_click. Use ANTES de clicar em "
+                        "qualquer coisa — nunca chute coordenadas. Funciona mesmo quando o seu próprio "
+                        "modelo não tem visão (a consulta vai para o modelo de visão configurado)."
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "required": ["query"],
+                        "properties": {
+                            "query": {"type": "string", "description": "Descrição do elemento, ex: 'botão X de fechar da aba do Chrome'"},
+                        },
+                    },
+                },
+            })
+            tools.append({
+                "type": "function",
+                "function": {
+                    "name": "mouse_click",
+                    "description": (
+                        "Clica na tela da Operador nas coordenadas x/y normalizadas 0-1000 do monitor ativo "
+                        "(as mesmas que screen_find retorna). O cursor teleporta e clica na hora. "
+                        "Obtenha as coordenadas via screen_find primeiro; após o clique, se for fazer outra "
+                        "ação dependente, chame screen_find de novo para conferir o novo estado da tela."
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "required": ["x", "y"],
+                        "properties": {
+                            "x": {"type": "number", "description": "0-1000 (esquerda→direita)"},
+                            "y": {"type": "number", "description": "0-1000 (topo→baixo)"},
+                            "button": {"type": "string", "enum": ["left", "right", "middle"]},
+                            "double": {"type": "boolean", "description": "Clique duplo"},
+                        },
+                    },
+                },
+            })
+            tools.append({
+                "type": "function",
+                "function": {
+                    "name": "mouse_scroll",
+                    "description": "Rola a tela (scroll). amount negativo = para baixo, positivo = para cima. Opcionalmente em x/y (0-1000).",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "amount": {"type": "integer", "description": "Cliques de scroll, ex: -5 desce, 5 sobe"},
+                            "x": {"type": "number"},
+                            "y": {"type": "number"},
+                        },
+                    },
+                },
+            })
+
+            def _copilot_runner(name: str, func) -> Callable[[dict[str, Any]], dict[str, Any]]:
+                def run(args: dict[str, Any]) -> dict[str, Any]:
+                    detail = str(args.get("query") or f"x={args.get('x')} y={args.get('y')}")[:160]
+                    self._append_terminal_event(
+                        request.memory,
+                        kind="tool_call",
+                        source="local_hands",
+                        status="running",
+                        tool_name=name,
+                        display_text=f"{name}: {detail}",
+                        metadata={},
+                    )
+                    result = func(args, request.memory)
+                    result_dict = result.to_dict()
+                    self._append_terminal_event(
+                        request.memory,
+                        kind="tool_result",
+                        source="local_hands",
+                        status="success" if result.ok else "failed",
+                        tool_name=name,
+                        display_text=(str((result.output or {}).get("answer") or "ok") if result.ok else (result.error or "falhou"))[:300],
+                        metadata={"toolResult": result_dict},
+                    )
+                    return result_dict
+                return run
+
+            runners["screen_find"] = _copilot_runner("screen.find", _screen_find)
+            runners["mouse_click"] = _copilot_runner("mouse.click", _mouse_click)
+            runners["mouse_scroll"] = _copilot_runner("mouse.scroll", _mouse_scroll)
+
+        # === Reminders / alarms (in-process scheduler) ===
+        from hana_agent_oss.tools.reminder_tools import (
+            reminder_cancel as _reminder_cancel,
+            reminder_create as _reminder_create,
+            reminder_list as _reminder_list,
+        )
+
+        tools.append({
+            "type": "function",
+            "function": {
+                "name": "reminder_create",
+                "description": (
+                    "Cria um lembrete/alarme. Informe 'at' (HH:MM), 'in_minutes' ou 'in_seconds'. "
+                    "repeat='daily' repete todo dia. A Hana avisa por voz (se TTS ligado) e no painel quando chegar a hora."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "required": ["text"],
+                    "properties": {
+                        "text": {"type": "string", "description": "O que lembrar"},
+                        "at": {"type": "string", "description": "Hora HH:MM (hoje, ou amanhã se já passou)"},
+                        "in_minutes": {"type": "number"},
+                        "in_seconds": {"type": "number"},
+                        "date": {"type": "string", "description": "Data opcional YYYY-MM-DD"},
+                        "repeat": {"type": "string", "enum": ["none", "daily"]},
+                    },
+                },
+            },
+        })
+        tools.append({
+            "type": "function",
+            "function": {
+                "name": "reminder_list",
+                "description": "Lista os lembretes ativos.",
+                "parameters": {"type": "object", "properties": {"include_done": {"type": "boolean"}}},
+            },
+        })
+        tools.append({
+            "type": "function",
+            "function": {
+                "name": "reminder_cancel",
+                "description": "Cancela um lembrete pelo id.",
+                "parameters": {"type": "object", "required": ["id"], "properties": {"id": {"type": "string"}}},
+            },
+        })
+        runners["reminder_create"] = lambda args: _reminder_create(args).to_dict()
+        runners["reminder_list"] = lambda args: _reminder_list(args).to_dict()
+        runners["reminder_cancel"] = lambda args: _reminder_cancel(args).to_dict()
+
+        # === Avisar a Operador no Discord (DM, mencionando ela) ===
+        # Hana decide quando disparar (ex.: depois de criar um alarme). O bot do
+        # Discord entrega a DM; aqui só enfileiramos na outbox.
+        from hana_agent_oss.tools.discord_tools import discord_notify as _discord_notify
+
+        tools.append({
+            "type": "function",
+            "function": {
+                "name": "discord_notify",
+                "description": (
+                    "Envia uma mensagem direta (DM) pra Operador no Discord, mencionando ela. "
+                    "Use quando VOCE decidir avisa-la de algo importante por fora (ex.: confirmar "
+                    "que criou um alarme, lembrar de uma pendencia). Nao e automatico — voce escolhe a hora. "
+                    "Escreva a mensagem ja pronta, curta e em pt-BR."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "required": ["message"],
+                    "properties": {"message": {"type": "string", "description": "A mensagem pra Operador"}},
+                },
+            },
+        })
+
+        def run_discord_notify(args: dict[str, Any]) -> dict[str, Any]:
+            message = str(args.get("message") or "").strip()
+            result = _discord_notify(request.memory, message)
+            self._append_terminal_event(
+                request.memory,
+                kind="tool_result",
+                source="discord",
+                status="success" if result.get("ok") else "failed",
+                tool_name="discord.notify",
+                display_text=(f"DM enfileirada pra Operador: {message[:160]}" if result.get("ok") else str(result.get("error"))),
+                metadata={"toolResult": result},
+            )
+            return result
+
+        runners["discord_notify"] = run_discord_notify
+
+        # === Mãos na memória (a Hana gerencia as próprias lembranças) ===
+        # Sempre expostas (memória é núcleo, não módulo opcional). Operam na
+        # MemoryStore viva da request; o painel Memória mostra tudo depois.
+        if request.memory is not None:
+            mem_store = request.memory
+
+            tools.append({
+                "type": "function",
+                "function": {
+                    "name": "memory_search",
+                    "description": (
+                        "Busca nas suas memórias persistentes (perfil, fatos, diários, anotações). "
+                        "Use quando a Operador perguntar 'o que você lembra de X', quando precisar "
+                        "conferir um fato antigo, ou ANTES de corrigir/apagar uma memória (para achar o id)."
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "required": ["query"],
+                        "properties": {
+                            "query": {"type": "string", "description": "Termos de busca"},
+                            "limit": {"type": "integer", "description": "Máx. resultados (padrão 8)"},
+                        },
+                    },
+                },
+            })
+            tools.append({
+                "type": "function",
+                "function": {
+                    "name": "memory_save",
+                    "description": (
+                        "Salva uma memória persistente nova (fato, preferência, decisão, contexto importante). "
+                        "category: preference_like, preference_dislike, personal_fact, ou general. "
+                        "Use para registrar na hora algo que a Operador pedir para você lembrar."
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "required": ["text"],
+                        "properties": {
+                            "text": {"type": "string", "description": "O fato, curto e específico"},
+                            "category": {"type": "string", "enum": ["preference_like", "preference_dislike", "personal_fact", "general"]},
+                            "importance": {"type": "string", "enum": ["low", "medium", "high"]},
+                        },
+                    },
+                },
+            })
+            tools.append({
+                "type": "function",
+                "function": {
+                    "name": "memory_update",
+                    "description": (
+                        "Corrige o texto de uma memória existente pelo id (use memory_search antes para achar). "
+                        "Use quando a Operador disser que uma lembrança sua está errada ou desatualizada."
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "required": ["id", "text"],
+                        "properties": {
+                            "id": {"type": "string"},
+                            "text": {"type": "string", "description": "Novo texto corrigido"},
+                        },
+                    },
+                },
+            })
+            tools.append({
+                "type": "function",
+                "function": {
+                    "name": "memory_delete",
+                    "description": (
+                        "Apaga (soft-delete, recuperável) uma memória pelo id. Use memory_search antes. "
+                        "Confirme com a Operador antes de apagar, a não ser que ela já tenha mandado apagar."
+                    ),
+                    "parameters": {"type": "object", "required": ["id"], "properties": {"id": {"type": "string"}}},
+                },
+            })
+            tools.append({
+                "type": "function",
+                "function": {
+                    "name": "memory_pin",
+                    "description": "Fixa (pinned=true) ou desafixa uma memória. Fixadas nunca decaem e rankeiam mais alto — use para 'nunca esqueça isso'.",
+                    "parameters": {
+                        "type": "object",
+                        "required": ["id"],
+                        "properties": {"id": {"type": "string"}, "pinned": {"type": "boolean"}},
+                    },
+                },
+            })
+
+            def _mem_compact(memory_item: dict[str, Any]) -> dict[str, Any]:
+                return {
+                    "id": memory_item.get("id"),
+                    "text": memory_item.get("text"),
+                    "category": memory_item.get("category"),
+                    "importance": memory_item.get("importance"),
+                    "pinned": memory_item.get("pinned"),
+                    "updated_at": memory_item.get("updated_at"),
+                }
+
+            def run_memory_search(args: dict[str, Any]) -> dict[str, Any]:
+                try:
+                    results = mem_store.search(str(args.get("query") or ""), limit=self._safe_int(args.get("limit"), 8))
+                    return {"ok": True, "memories": [_mem_compact(m) for m in results]}
+                except Exception as exc:  # noqa: BLE001
+                    return {"ok": False, "error": str(exc)}
+
+            def run_memory_save(args: dict[str, Any]) -> dict[str, Any]:
+                text = str(args.get("text") or "").strip()
+                if not text:
+                    return {"ok": False, "error": "text obrigatório"}
+                try:
+                    saved = mem_store.add_memory(
+                        text,
+                        kind="long_term",
+                        source="hana_chat_tool",
+                        metadata={
+                            "category": str(args.get("category") or "general"),
+                            "importance": str(args.get("importance") or "medium"),
+                        },
+                    )
+                    return {"ok": True, "memory": _mem_compact(saved)}
+                except Exception as exc:  # noqa: BLE001
+                    return {"ok": False, "error": str(exc)}
+
+            def run_memory_update(args: dict[str, Any]) -> dict[str, Any]:
+                memory_id = str(args.get("id") or "").strip()
+                text = str(args.get("text") or "").strip()
+                if not memory_id or not text:
+                    return {"ok": False, "error": "id e text obrigatórios"}
+                try:
+                    updated = mem_store.add_memory(text, memory_id=memory_id, source="hana_chat_tool")
+                    return {"ok": True, "memory": _mem_compact(updated)}
+                except Exception as exc:  # noqa: BLE001
+                    return {"ok": False, "error": str(exc)}
+
+            def run_memory_delete(args: dict[str, Any]) -> dict[str, Any]:
+                memory_id = str(args.get("id") or "").strip()
+                if not memory_id:
+                    return {"ok": False, "error": "id obrigatório"}
+                deleted = mem_store.delete_memory(memory_id, hard=False)
+                return {"ok": bool(deleted), "deleted": bool(deleted), "error": None if deleted else "memória não encontrada"}
+
+            def run_memory_pin(args: dict[str, Any]) -> dict[str, Any]:
+                memory_id = str(args.get("id") or "").strip()
+                if not memory_id:
+                    return {"ok": False, "error": "id obrigatório"}
+                pinned = bool(args.get("pinned", True))
+                updated = mem_store.pin_memory(memory_id, pinned=pinned)
+                return {"ok": bool(updated), "pinned": pinned, "error": None if updated else "memória não encontrada"}
+
+            runners["memory_search"] = run_memory_search
+            runners["memory_save"] = run_memory_save
+            runners["memory_update"] = run_memory_update
+            runners["memory_delete"] = run_memory_delete
+            runners["memory_pin"] = run_memory_pin
 
         if not tools and not supports_tools:
             return [], {}
@@ -687,78 +1343,40 @@ class OpenRouterProvider:
             sanitized[key] = cls._sanitize_tool_schema(item)
         return sanitized
 
-    @staticmethod
-    def _omni_schema() -> dict[str, Any]:
-        """Return the OpenAI-compatible function schema for Omni supervision."""
-        return {
-            "type": "function",
-            "function": {
-                "name": "omni_supervise",
-                "description": "Delegate a local PC task to Omni-Agent OS under Hana supervision.",
-                "parameters": {
-                    "type": "object",
-                    "required": ["task"],
-                    "properties": {
-                        "task": {"type": "string"},
-                        "mode": {"type": "string", "enum": ["inspect", "execute", "review"]},
-                        "acceptance": {"type": "string"},
-                        "max_rounds": {"type": "integer"},
-                    },
-                    "additionalProperties": False,
-                },
-            },
-        }
-
-    @staticmethod
-    def _agent_job_cancel_schema() -> dict[str, Any]:
-        """Return the OpenAI-compatible function schema for background job cancellation."""
-        return {
-            "type": "function",
-            "function": {
-                "name": "agent_job_cancel",
-                "description": "Cancel a running Omni background job when Nakamura explicitly asks to stop it.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "job_id": {"type": "string"},
-                        "agent": {"type": "string", "enum": ["omni"]},
-                        "active": {"type": "boolean"},
-                        "reason": {"type": "string"},
-                    },
-                    "additionalProperties": False,
-                },
-            },
-        }
-
     def _local_tool_instruction(self, *, enabled: bool, supported: bool) -> str:
         """Explain local tool availability for OpenRouter models."""
         if not supported:
             return (
                 "\n\n[LOCAL TOOL STATUS]\n"
                 f"This {self.provider_label} model is not cataloged as supporting tool calls in this turn.\n"
-                "Do not write mcp_discover(...), mcp_invoke(...), omni_supervise(...), pseudo-code, or function-call syntax as visible text.\n"
-                f"If Nakamura asks for MCP, Tavily, or Omni, explain that the selected {self.provider_label} model does not expose tools; she can select a tools-capable model.\n"
+                "Do not write mcp_discover(...), mcp_invoke(...), terminal_run(...), pseudo-code, or function-call syntax as visible text.\n"
+                f"If Operador asks for MCP, Tavily, or local PC actions, explain that the selected {self.provider_label} model does not expose tools; she can select a tools-capable model.\n"
             )
         if not enabled:
             return (
                 "\n\n[LOCAL TOOL STATUS]\n"
                 f"The selected {self.provider_label} model supports tools, but no Hana local tools are enabled/configured for this turn.\n"
-                "Do not write mcp_discover(...), mcp_invoke(...), omni_supervise(...) as visible text, and do not claim a tool was called.\n"
+                "Do not write mcp_discover(...), mcp_invoke(...), terminal_run(...) as visible text, and do not claim a tool was called.\n"
             )
         return (
             "\n\n[LOCAL TOOL MANUAL]\n"
             "Use actual tool calls, never visible pseudo-call text.\n"
             "Use mcp_discover and mcp_invoke for enabled MCP servers such as Tavily web research; respect backend allowlists and real tool errors.\n"
-            "Use omni_supervise for local PC automation, processes, folders, windows, clipboard, OCR, or general computer tasks. It starts a background job and returns job_id/status=running quickly.\n"
-            
-            "When an Omni tool returns job_id/status=running, tell Nakamura the job started and that the final report will appear in Terminal Agent; do not summarize a result that has not arrived yet.\n"
-            "If Nakamura explicitly asks to stop, cancel, parar, or abort a running Omni job, call agent_job_cancel. Do not treat normal user text as a hidden cancellation trigger.\n"
+            "Use terminal_run / terminal_inspect_dir for local PC actions: run commands/scripts, find files, inspect folders. They run in-process and return the real output.\n"
+            "To CREATE or EDIT a file (HTML/CSS/JS/Python/text), ALWAYS use file_write with the full content as the argument — one call per file. "
+            "NEVER write file content through terminal_run with PowerShell here-strings (@\"...\"@ / echo / Out-File): that corrupts the content "
+            "(eats $variables and ${...}, turns backticks into escapes, mangles accents, and fails on big files). Use file_read to inspect and file_exists to check. "
+            "Do not re-read the same file repeatedly — read once, act, then finish; do not loop.\n"
+            "Before destructive/irreversible actions (delete, format, admin, credentials/.env), investigate first, show what you will do, and confirm with Operador.\n"
             "Do not use local tools for normal chat, STT, TTS, or image generation; use MCP web tools only for explicit external research/current-facts needs.\n"
             "If a tool returns ok=false, quote the returned error exactly and do not invent a different cause.\n"
         )
 
     def _post_chat_completion(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Send one non-streaming Chat Completions request to the provider."""
+        # Strip internal-only hints (prefixed with '_', e.g. _channel) so they never
+        # reach the provider API as unknown fields.
+        payload = {k: v for k, v in payload.items() if not str(k).startswith("_")}
         body = json.dumps(payload).encode("utf-8")
         request = urllib.request.Request(
             self.chat_completions_url,
@@ -817,13 +1435,15 @@ class OpenRouterProvider:
         memory: Any,
         tool_runs: list[dict[str, Any]] | None = None,
         provider_routing: dict[str, Any] | None = None,
+        channel: str = "",
+        thinking: bool = True,
     ) -> dict[str, Any]:
         """Run a bounded OpenRouter tool-call loop and return the final response.
 
         When ``tool_runs`` is provided, every executed tool call records a compact
         run entry ({tool, ok, summary, query, sources}) so the chat can render a
         tool-activity card. This is the single capture point for all tools
-        (MCP/Tavily, Omni).
+        (MCP/Tavily, local hands).
         """
         payload_base: dict[str, Any] = {
             "model": model,
@@ -831,6 +1451,12 @@ class OpenRouterProvider:
             "temperature": temperature,
             "stream": False,
         }
+        if channel:
+            # Internal hint (stripped before any HTTP call) so the provider can tune
+            # latency per channel — e.g. disable reasoning on voice/terminal.
+            payload_base["_channel"] = channel
+        # Internal hint (stripped before HTTP): user's Groq "thinker" toggle.
+        payload_base["_thinking"] = bool(thinking)
         routing_payload = self._provider_routing_payload(provider_routing)
         if routing_payload:
             payload_base["provider"] = routing_payload
@@ -841,14 +1467,21 @@ class OpenRouterProvider:
             payload_base["tool_choice"] = "auto"
 
         last_response: dict[str, Any] = {}
-        for round_index in range(self.tool_rounds + 1):
+        rounds_limit = self._tool_rounds_limit(memory)  # 0 = unlimited
+        round_index = 0
+        while True:
             payload = dict(payload_base)
             payload["messages"] = messages
             last_response = self._post_chat_completion(payload)
             message = self._response_message(last_response)
             tool_calls = message.get("tool_calls") if isinstance(message, dict) else None
-            if not tool_calls or round_index >= self.tool_rounds:
+            if not tool_calls:
                 return last_response
+            if rounds_limit and round_index >= rounds_limit:
+                # Round budget exhausted with tool calls still pending. Do NOT silently
+                # drop them (the model would have already promised work it can't do).
+                # Tell the model and force one final honest text answer without tools.
+                break
 
             messages.append(
                 {
@@ -878,6 +1511,7 @@ class OpenRouterProvider:
                         "content": json.dumps(result, ensure_ascii=False),
                     }
                 )
+            round_index += 1
 
         self._append_terminal_event(
             memory,
@@ -885,10 +1519,27 @@ class OpenRouterProvider:
             source=self.provider_id,
             status="failed",
             tool_name=f"{self.provider_id}.tools",
-            display_text=f"{self.provider_label} atingiu o limite de rodadas de tools.",
-            metadata={"toolRounds": self.tool_rounds},
+            display_text=f"{self.provider_label} atingiu o limite de rodadas de tools ({rounds_limit}).",
+            metadata={"toolRounds": rounds_limit},
         )
-        return last_response
+        messages.append(
+            {
+                "role": "user",
+                "content": (
+                    "[SISTEMA] Limite de rodadas de ferramentas atingido neste turno; suas últimas chamadas NÃO foram executadas. "
+                    "Responda agora SEM ferramentas, com honestidade: diga exatamente o que você JÁ fez de verdade, o que FALTOU fazer, "
+                    "e peça para a Operador mandar 'continua' para você terminar no próximo turno. "
+                    "É PROIBIDO afirmar que terminou ou prometer que 'vai fazer agora'."
+                ),
+            }
+        )
+        final_payload = dict(payload_base)
+        final_payload["messages"] = messages
+        final_payload["tool_choice"] = "none"
+        try:
+            return self._post_chat_completion(final_payload)
+        except Exception:
+            return last_response
 
     @staticmethod
     def _response_message(response_data: dict[str, Any]) -> dict[str, Any]:
@@ -902,19 +1553,32 @@ class OpenRouterProvider:
 
     @classmethod
     def _response_text(cls, response_data: dict[str, Any]) -> str:
-        """Extract normalized text from OpenRouter chat/non-chat choices."""
+        """Extract normalized text from OpenRouter/Groq chat/non-chat choices.
+
+        Reasoning models (qwen3, gpt-oss) sometimes return the answer in a separate
+        ``reasoning``/``reasoning_content`` field with ``content`` empty. Reading only
+        ``content`` then yields "" -> the turn fails as 'empty_provider_response' even
+        though the model DID answer (tokens were generated). We fall back to the
+        reasoning field so a reasoning model never looks like a dead provider.
+        """
         message = cls._response_message(response_data)
+        text = ""
         content = message.get("content") if isinstance(message, dict) else ""
         if isinstance(content, str):
-            return content.strip()
-        if isinstance(content, list):
+            text = content.strip()
+        elif isinstance(content, list):
             parts = [
                 str(part.get("text") or "").strip()
                 for part in content
                 if isinstance(part, dict) and part.get("type") == "text"
             ]
-            return "\n".join(part for part in parts if part).strip()
-        choices = response_data.get("choices") if isinstance(response_data, dict) else None
-        if isinstance(choices, list) and choices and isinstance(choices[0], dict):
-            return str(choices[0].get("text") or "").strip()
-        return ""
+            text = "\n".join(part for part in parts if part).strip()
+        if not text:
+            choices = response_data.get("choices") if isinstance(response_data, dict) else None
+            if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+                text = str(choices[0].get("text") or "").strip()
+        # NOTE: never fall back to message.reasoning here — for reasoning models that
+        # field is raw chain-of-thought ("The user wants me to..."), which would leak
+        # into the chat and TTS. Groq reasoning models use reasoning_format="parsed"
+        # so the clean answer is already in `content`.
+        return text

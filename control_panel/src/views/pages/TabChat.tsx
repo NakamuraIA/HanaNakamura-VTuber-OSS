@@ -196,7 +196,7 @@ function planHasRealSteps(plan?: ChatMessage["agentPlan"]) {
 
 // Collapsible "Atividade de ferramentas" card (amber, like the Terminal Agente tool events).
 // Shows every tool Hana used this turn: which tool, ok/fail, query and a short return — so
-// Nakamura can see if she tried a tool, if it failed, and what it returned.
+// Operador can see if she tried a tool, if it failed, and what it returned.
 function ToolRunsRenderer({ toolRuns }: { toolRuns: NonNullable<NonNullable<ChatMessage["meta"]>["toolRuns"]> }) {
   const [expanded, setExpanded] = useState(false);
   const failed = toolRuns.filter((run) => !run.ok).length;
@@ -661,6 +661,10 @@ export function TabChat({ isActive }: TabChatProps) {
     setNativeSearchMode(selectedProvider === "gemini_api" ? "auto" : "off");
   };
 
+  // Gemini tem grounding nativo; OpenRouter tem o plugin "web" (cobrado por busca,
+  // então o padrão lá é off e a Operador liga quando quiser).
+  const providerHasWebSearch = provider === "gemini_api" || provider === "openrouter";
+
   useEffect(() => {
     if (!availableModels.some((item) => item.id === model)) {
       setModel(availableModels[0]?.id || "");
@@ -807,7 +811,7 @@ export function TabChat({ isActive }: TabChatProps) {
         setCatalogModels(models);
         setProvider(selectedProvider);
         setModel(selectedModel);
-        setNativeSearchMode(selectedProvider === "gemini_api" ? ((chatConfig?.nativeSearchMode || "auto") as "auto" | "force" | "off") : "off");
+        setNativeSearchMode((selectedProvider === "gemini_api" || selectedProvider === "openrouter") ? ((chatConfig?.nativeSearchMode || (selectedProvider === "gemini_api" ? "auto" : "off")) as "auto" | "force" | "off") : "off");
         setOpenrouterRoutingByModel(chatConfig?.openrouterRoutingByModel || {});
         const mode = asSafetyMode(settings?.safety_mode);
         setSafetyMode(mode);
@@ -830,7 +834,7 @@ export function TabChat({ isActive }: TabChatProps) {
         .filter(m => m.role !== "system") // ignora system do histÃ³rico
         .map(m => ({
           id: `hist-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-          role: m.role === "Nakamura" ? "user" as const : "hana" as const,
+          role: m.role === "Operador" ? "user" as const : "hana" as const,
           content: m.content,
           timestamp: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
         }));
@@ -849,7 +853,7 @@ export function TabChat({ isActive }: TabChatProps) {
     ApiController.updateChatConfig({
       provider,
       model,
-      nativeSearchMode: provider === "gemini_api" ? nativeSearchMode : "off",
+      nativeSearchMode: providerHasWebSearch ? nativeSearchMode : "off",
       openrouterRoutingByModel,
     });
   }, [provider, model, nativeSearchMode, openrouterRoutingByModel, chatConfigLoaded]);
@@ -966,6 +970,20 @@ export function TabChat({ isActive }: TabChatProps) {
     if (!complete) return;
     typingCompleteRef.current = null;
     stopTypingAnimation();
+    // Force a final render of the WHOLE buffer. The authoritative `final` text is often
+    // shorter than the raw stream (image/memory XML tags stripped), and the reveal loop
+    // can stop on a stale partial render without painting the cleaned text — which then
+    // gets frozen as the saved message (raw tag visible + cut mid-word). Paint it fully.
+    const full = typingBufferRef.current;
+    typingDisplayedRef.current = full.length;
+    currentResponseRef.current = full;
+    setMessages(prev => {
+      const last = prev[prev.length - 1];
+      if (last && last.role === "hana" && last.id === "streaming-res" && last.content !== full) {
+        return [...prev.slice(0, -1), { ...last, content: full }];
+      }
+      return prev;
+    });
     complete();
   };
 
@@ -1320,7 +1338,7 @@ export function TabChat({ isActive }: TabChatProps) {
         attachments,
         provider,
         model,
-        provider === "gemini_api" ? nativeSearchMode : "off",
+        providerHasWebSearch ? nativeSearchMode : "off",
         safetyMode,
         historyForBackend,
         provider === "openrouter" ? (openrouterRoutingByModel[model] || DEFAULT_OPENROUTER_ROUTING) : {},
@@ -1672,14 +1690,14 @@ export function TabChat({ isActive }: TabChatProps) {
             {/* SECAO: COMPORTAMENTO */}
             <div className="flex flex-col gap-2 border-t border-white/5 pt-2">
               <div className="flex flex-wrap items-center gap-2">
-                {provider === "gemini_api" ? (
+                {providerHasWebSearch ? (
                   <div className="flex items-center gap-1.5 rounded-lg border border-emerald-400/15 bg-emerald-500/5 px-2.5 py-1.5 transition-colors hover:border-emerald-400/30">
                     <Globe2 size={13} className="text-emerald-300" />
                     <select
                       className="cursor-pointer bg-transparent font-mono text-[11px] font-bold uppercase text-[var(--text-primary)] outline-none [&>option]:bg-[#0f0f13]"
                       value={nativeSearchMode}
                       onChange={(e) => setNativeSearchMode(e.target.value as "auto" | "force" | "off")}
-                      title="Grounding nativo com Google Search (somente Gemini)"
+                      title={provider === "gemini_api" ? "Grounding nativo com Google Search" : "Pesquisa web do OpenRouter (plugin web, cobrado por busca)"}
                     >
                       <option value="auto" className="bg-[#0f0f13]">Web auto</option>
                       <option value="force" className="bg-[#0f0f13]">Web on</option>
@@ -1853,7 +1871,7 @@ export function TabChat({ isActive }: TabChatProps) {
                   <div className="w-8 h-8 rounded-full bg-[var(--purple-dark)] border border-[var(--purple-neon)] flex items-center justify-center shadow-[0_0_10px_var(--purple-dark)] overflow-hidden">
                     <img src="/hana_perfil.png" className="w-full h-full object-cover" alt="H" />
                   </div>
-                  <span className="text-xs font-black text-[var(--purple-neon)] uppercase tracking-[0.2em] drop-shadow-[0_0_5px_var(--purple-dark)]">Hana Nakamura</span>
+                  <span className="text-xs font-black text-[var(--purple-neon)] uppercase tracking-[0.2em] drop-shadow-[0_0_5px_var(--purple-dark)]">Hana Operador</span>
                   <span className="text-[10px] font-mono text-[var(--text-muted)]">{msg.timestamp}</span>
                   <button onClick={() => deleteMessage(msg.id)} className="p-1 rounded-lg text-[var(--text-muted)] hover:text-red-300 hover:bg-red-500/10 transition-colors" title="Apagar mensagem">
                     <Trash2 size={12} />
@@ -2038,7 +2056,7 @@ export function TabChat({ isActive }: TabChatProps) {
               onKeyDown={handleKeyDown}
               onPaste={handlePaste}
               className="w-full bg-transparent text-[var(--text-primary)] text-[15px] resize-none outline-none custom-scrollbar p-3 pl-5 max-h-60 min-h-[54px] font-medium placeholder:text-[var(--text-muted)] leading-relaxed"
-              placeholder={attachments.length > 0 ? "Adicione uma descricao para os anexos..." : "Fale com a Hana Nakamura... (Ou arraste arquivos para aqui)"}
+              placeholder={attachments.length > 0 ? "Adicione uma descricao para os anexos..." : "Fale com a Hana Operador... (Ou arraste arquivos para aqui)"}
               rows={1}
             />
           </div>

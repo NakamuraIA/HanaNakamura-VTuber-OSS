@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import importlib.util
+import math
 import os
+import threading
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -103,3 +105,69 @@ def semantic_memory_status() -> SemanticMemoryStatus:
         sqlite_vec_available=sqlite_vec_available,
         mode=mode,
     )
+
+
+def is_semantic_enabled() -> bool:
+    """True only when the user opted in AND fastembed is importable.
+
+    Default OFF: on a weak machine we never pay the ONNX cost unless the user
+    sets HANA_MEMORY_SEMANTIC=1 and has fastembed installed. Everything else in
+    the store falls back to FTS when this returns False.
+    """
+    return os.environ.get("HANA_MEMORY_SEMANTIC", "0") == "1" and FastEmbedProvider.available()
+
+
+_PROVIDER_LOCK = threading.Lock()
+_PROVIDER: FastEmbedProvider | None = None
+
+
+def get_embedding_provider() -> FastEmbedProvider | None:
+    """Return a process-wide warm embedding provider, or None when disabled.
+
+    The FastEmbed model loads lazily on first embed and stays cached, so the
+    first search/index pays the load and every later call is cheap. Returns None
+    (never raises) when semantic memory is off so callers degrade to FTS.
+    """
+    global _PROVIDER
+    if not is_semantic_enabled():
+        return None
+    with _PROVIDER_LOCK:
+        if _PROVIDER is None:
+            model = os.environ.get("HANA_MEMORY_EMBED_MODEL", DEFAULT_EMBED_MODEL)
+            _PROVIDER = FastEmbedProvider(model=model)
+        return _PROVIDER
+
+
+def embed_query(text: str) -> list[float] | None:
+    """Embed a single search query, or None when disabled/unavailable.
+
+    This is the only embedding call that runs inline during a turn; it is one
+    short string and the model is warm after the first use. Never raises.
+    """
+    provider = get_embedding_provider()
+    if provider is None:
+        return None
+    clean = str(text or "").strip()
+    if not clean:
+        return None
+    try:
+        vectors = provider.embed([clean])
+    except Exception:
+        return None
+    return vectors[0] if vectors else None
+
+
+def cosine_similarity(a: list[float], b: list[float]) -> float:
+    """Plain cosine similarity in [-1, 1]; 0.0 on shape mismatch or zero norm."""
+    if not a or not b or len(a) != len(b):
+        return 0.0
+    dot = 0.0
+    norm_a = 0.0
+    norm_b = 0.0
+    for x, y in zip(a, b):
+        dot += x * y
+        norm_a += x * x
+        norm_b += y * y
+    if norm_a <= 0.0 or norm_b <= 0.0:
+        return 0.0
+    return dot / (math.sqrt(norm_a) * math.sqrt(norm_b))

@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 
 from hana_agent_oss.memory.memory_xml import strip_memory_xml_tags
+from hana_agent_oss.tools.skill_tools import strip_skill_xml_tags
 
 
 CODE_BLOCK_RE = re.compile(r"```.*?```", re.DOTALL)
@@ -53,6 +54,11 @@ def sanitize_tts_text(text: str) -> str:
     """
     value = str(text or "")
     value = strip_memory_xml_tags(value)
+    value = strip_skill_xml_tags(value)
+    # Kill markdown table separators / long dash runs up front so they never reach
+    # TTS as spoken garbage ("Valor USD ------- Robux").
+    value = re.sub(r"[|]{1,}", " ", value)
+    value = re.sub(r"-{2,}", " ", value)
     value = TTS_META_RE.sub(" ", value)
     value = EMOJI_RE.sub(" ", value)
     value = CODE_BLOCK_RE.sub(" ", value)
@@ -70,9 +76,43 @@ def sanitize_tts_text(text: str) -> str:
     return WHITESPACE_RE.sub(" ", value).strip()
 
 
+TABLE_SEPARATOR_RE = re.compile(r"^\s*\|?[\s:|-]*-{2,}[\s:|-]*\|?\s*$")
+HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s*")
+BOLD_ITALIC_RE = re.compile(r"(\*\*|__|\*|_|~~)")
+LEADING_BULLET_RE = re.compile(r"^\s*([-*•]|\d{1,2}[.)])\s+")
+
+
+def plainify_for_voice(text: str) -> str:
+    """Strip chat-style markdown into clean plain prose for voice/terminal channels.
+
+    Weak models ignore the "no markdown" voice rule and emit tables/headers/bold,
+    which look wrong in the terminal and become garbage in TTS ("Valor USD ----").
+    This forces clean output regardless of the model, keeping line breaks for
+    terminal readability (unlike sanitize_tts_text, which one-lines for TTS).
+    """
+    value = strip_skill_xml_tags(strip_memory_xml_tags(str(text or "")))
+    value = EMOJI_RE.sub("", value)
+    out_lines: list[str] = []
+    for line in value.splitlines():
+        if TABLE_SEPARATOR_RE.match(line):
+            continue  # drop |---|---| table rulers entirely
+        # Markdown table row -> plain "a, b, c"
+        if line.count("|") >= 2:
+            cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+            line = ", ".join(cell for cell in cells if cell)
+        line = HEADING_RE.sub("", line)
+        line = LEADING_BULLET_RE.sub("", line)
+        line = BOLD_ITALIC_RE.sub("", line)
+        line = line.replace("`", "")
+        out_lines.append(line.rstrip())
+    # Collapse 3+ blank lines into one.
+    cleaned = re.sub(r"\n{3,}", "\n\n", "\n".join(out_lines))
+    return cleaned.strip()
+
+
 def tts_payload(display_text: str, explicit_tts_text: str | None = None) -> dict[str, str]:
     source = explicit_tts_text if explicit_tts_text is not None else display_text
     return {
-        "display_text": strip_memory_xml_tags(str(display_text or "")),
+        "display_text": strip_skill_xml_tags(strip_memory_xml_tags(str(display_text or ""))),
         "tts_text": sanitize_tts_text(source),
     }

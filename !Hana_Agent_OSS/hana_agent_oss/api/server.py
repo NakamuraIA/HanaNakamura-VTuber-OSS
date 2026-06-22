@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 import time
 from contextlib import asynccontextmanager
@@ -31,6 +32,7 @@ from hana_agent_oss.api.routers import (
     image_router,
     memory_router,
     mcp_router,
+    reminders_router,
     status_router,
     system_router,
     terminal_agent_router,
@@ -40,7 +42,10 @@ from hana_agent_oss.api.services.catalog import DEFAULT_CONNECTIONS
 from hana_agent_oss.api.services.agent_jobs import AgentJobManager, set_agent_job_manager
 from hana_agent_oss.core.runtime import HanaAgentCore
 from hana_agent_oss.memory.store import MemoryStore
+from hana_agent_oss.modules.reminders import ReminderScheduler, set_reminder_scheduler
 from hana_agent_oss.modules.voice.runtime import VoiceRuntime, voice_config_with_connections
+
+logger = logging.getLogger(__name__)
 
 
 def hydrate_voice_runtime_state(app: FastAPI) -> None:
@@ -62,7 +67,23 @@ def hydrate_voice_runtime_state(app: FastAPI) -> None:
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """FastAPI lifespan hook used for runtime hydration."""
     hydrate_voice_runtime_state(app)
+    app.state.reminders.start()
+    app.state.sleep_scheduler.start()
+    # Sobe o bot do Discord automaticamente se o toggle já estava ligado (e há token).
+    try:
+        from hana_agent_oss.api.routers.config import normalize_connections_config
+        from hana_agent_oss.api.services.catalog import DEFAULT_CONNECTIONS
+        connections = normalize_connections_config(
+            app.state.memory.get_setting("connections_config", dict(DEFAULT_CONNECTIONS))
+        )
+        if connections.get("discord"):
+            app.state.discord_bot.start()
+    except Exception:
+        logger.exception("Falha ao iniciar o bot do Discord no startup.")
     yield
+    app.state.discord_bot.stop()
+    app.state.sleep_scheduler.stop()
+    app.state.reminders.stop()
 
 
 def create_app() -> FastAPI:
@@ -79,6 +100,13 @@ def create_app() -> FastAPI:
     app.state.agent_jobs = AgentJobManager(memory=app.state.memory)
     app.state.agent_jobs.set_speaker(app.state.voice_runtime.speak_text)
     set_agent_job_manager(app.state.agent_jobs)
+    app.state.reminders = ReminderScheduler(memory=app.state.memory)
+    app.state.reminders.set_speaker(app.state.voice_runtime.speak_text)
+    set_reminder_scheduler(app.state.reminders)
+    from hana_agent_oss.memory.sleep import SleepScheduler
+    app.state.sleep_scheduler = SleepScheduler(memory=app.state.memory)
+    from hana_agent_oss.discord_bot.manager import DiscordBotManager
+    app.state.discord_bot = DiscordBotManager()
     app.state.started_at = time.time()
 
     for router in (
@@ -88,6 +116,7 @@ def create_app() -> FastAPI:
         image_router,
         memory_router,
         mcp_router,
+        reminders_router,
         config_router,
         discord_router,
         terminal_agent_router,

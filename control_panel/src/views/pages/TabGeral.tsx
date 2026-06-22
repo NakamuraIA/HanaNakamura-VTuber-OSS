@@ -6,7 +6,8 @@ import { Card } from "../components/shared/Card";
 import { TabHeader } from "../components/shared/TabHeader";
 import { Button } from "../components/shared/Button";
 
-import { MonitorDot, BrainCircuit, Mic, Video, Eye, MessageSquareText, PlugZap, Activity, TerminalSquare, Settings, Laptop, Cpu, FolderCog, Save, CheckCircle, Bot } from "lucide-react";
+import { MonitorDot, BrainCircuit, Mic, Eye, MessageSquareText, PlugZap, Activity, TerminalSquare, Settings, Laptop, Cpu, FolderCog, Save, CheckCircle, Bot, BellRing, X } from "lucide-react";
+import type { Reminder } from "../../api/reminders";
 
 const VISION_QUALITY_OPTIONS: { id: VisionQualityProfile; label: string; description: string }[] = [
   { id: "full_hd_png", label: "Full HD PNG", description: "Maxima qualidade, comportamento atual." },
@@ -67,6 +68,22 @@ export function TabGeral() {
   const [voiceConfig, setVoiceConfig] = useState<VoiceConfig | null>(null);
   const [saving, setSaving] = useState(false);
   const [success, setSuccess] = useState(false);
+  const [reminders, setReminders] = useState<Reminder[]>([]);
+
+  const refreshReminders = () => {
+    ApiController.getReminders().then(setReminders).catch(() => setReminders([]));
+  };
+
+  useEffect(() => {
+    refreshReminders();
+    const timer = window.setInterval(refreshReminders, 20000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const cancelReminder = async (id: string) => {
+    await ApiController.cancelReminder(id);
+    refreshReminders();
+  };
 
   useEffect(() => {
     // Tenta conectar via WebSocket
@@ -245,9 +262,8 @@ export function TabGeral() {
               { id: "tts", label: "Voz (TTS)", icon: <Mic size={20} /> },
               { id: "stt", label: "Ouvido (STT)", icon: <Mic size={20} /> },
               { id: "visao", label: "Visão Computacional", icon: <Eye size={20} /> },
-              { id: "vtube_studio", label: "VTube Studio", icon: <Video size={20} /> },
               { id: "discord", label: "Bot Discord", icon: <MessageSquareText size={20} /> },
-              { id: "omni", label: "Omni Executor", icon: <Bot size={20} /> },
+              { id: "localHands", label: "Mãos (Terminal)", icon: <Bot size={20} /> },
             ].map((mod) => {
               const isAtivo = status ? status.modules[mod.id as keyof SystemStatus["modules"]] : false;
               
@@ -268,6 +284,40 @@ export function TabGeral() {
               );
             })}
           </div>
+        </Card>
+
+        {/* CARD: LEMBRETES ATIVOS */}
+        <Card hover className="md:col-span-2">
+          <h3 className="font-bold text-[var(--text-primary)] mb-4 text-lg flex items-center gap-2 relative z-10">
+            <BellRing size={20} className="text-[var(--accent)]" /> Lembretes
+            <span className="ml-auto text-xs font-mono text-[var(--text-muted)]">{reminders.length} ativo(s)</span>
+          </h3>
+          {reminders.length === 0 ? (
+            <p className="text-sm text-[var(--text-muted)] relative z-10">
+              Nenhum lembrete ativo. Peça no chat: "Hana, me lembra de X às 16h".
+            </p>
+          ) : (
+            <div className="flex flex-col gap-2 relative z-10">
+              {reminders.map((item) => (
+                <div key={item.id} className="flex items-center gap-3 rounded-lg border border-white/10 bg-black/30 px-3 py-2">
+                  <BellRing size={14} className="shrink-0 text-[var(--accent)]" />
+                  <span className="min-w-0 flex-1 truncate text-sm text-white">{item.text}</span>
+                  <span className="shrink-0 font-mono text-[11px] text-[var(--text-muted)]">
+                    {new Date(item.due_at).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}
+                    {item.repeat === "daily" ? " · diário" : ""}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => cancelReminder(item.id)}
+                    className="shrink-0 rounded p-1 text-[var(--text-muted)] transition-colors hover:text-red-400"
+                    aria-label="Cancelar lembrete"
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
         </Card>
 
         {/* CARD: CONFIGURAÇÕES LOCAIS DE AMBIENTE (Portabilidade) */}
@@ -410,7 +460,7 @@ export function TabGeral() {
                 className="w-full bg-black/50 border border-[var(--border-strong)] hover:border-[var(--cyan-neon)]/50 focus:border-[var(--cyan-neon)] text-white font-mono rounded-xl px-4 py-3 text-sm transition-colors outline-none"
               />
               <span className="text-[10px] text-[var(--text-muted)] font-mono">
-                Onde arquivos de fotos do VTube, logs de áudio ou capturas do sistema serão salvos.
+                Onde imagens geradas, logs de áudio ou capturas do sistema serão salvos.
               </span>
             </div>
           </div>

@@ -54,7 +54,7 @@ The backend maps model metadata into Hana capability flags:
 - `input_modalities` containing `image` enables vision attachments.
 - `input_modalities` containing `file` enables document/file attachments.
 - `supported_parameters` containing `tools` or `tool_choice` enables local tool
-  calls such as Omni, when the bridge is also configured.
+  calls such as the terminal hands (`terminal_run`) and MCP.
 - pricing, free status, context length and description are displayed when the
   OpenRouter catalog returns them.
 

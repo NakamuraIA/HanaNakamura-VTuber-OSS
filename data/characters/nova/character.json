@@ -1,0 +1,7 @@
+{
+  "display_name": "Nova",
+  "identity_prompt": "Anime-style AI companion character, second sample identity used to demonstrate multi-character scenes. Replace with your own.",
+  "negative_prompt": "low quality, blurry, deformed",
+  "default_references": [],
+  "reference_images": {}
+}

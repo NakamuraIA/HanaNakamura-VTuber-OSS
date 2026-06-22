@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import copy
+import logging
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
+
+logger = logging.getLogger(__name__)
 
 from hana_agent_oss.api.services.catalog import (
     DEFAULT_CHAT_CONFIG,
@@ -15,13 +18,12 @@ from hana_agent_oss.api.services.catalog import (
     delete_custom_model,
     upsert_custom_model,
 )
-from hana_agent_oss.modules.voice.devices import list_input_devices
+from hana_agent_oss.modules.voice.devices import list_input_devices, list_output_devices
 from hana_agent_oss.modules.voice.runtime import VoiceRuntime, voice_config_with_connections
 from hana_agent_oss.modules.vision.periodic_vision import (
     DEFAULT_VISION_QUALITY_PROFILE,
     normalize_vision_quality_profile,
 )
-from hana_agent_oss.tools.omni_tools import normalize_omni_base_url, omni_status
 from hana_agent_oss.providers.provider_selector.openrouter.catalog import get_openrouter_endpoints
 
 router = APIRouter(tags=["Configuration"])
@@ -40,6 +42,9 @@ PROVIDER_ALIASES = {
     "groqcloud": "groq",
     "glock": "groq",
     "groq": "groq",
+    "deepseek": "deepseek",
+    "deepseek_official": "deepseek",
+    "deep_seek": "deepseek",
 }
 
 
@@ -72,6 +77,17 @@ def normalize_llm_config(config: dict[str, Any]) -> dict[str, Any]:
     normalized = dict(DEFAULT_LLM_CONFIG)
     normalized.update(config)
     normalized["llmProvider"] = normalize_provider(normalized.get("llmProvider"))
+    normalized["agentModel"] = str(normalized.get("agentModel") or "").strip()
+    # Blank agentProvider means "use the same provider as the main model"; only normalize
+    # when the user actually picked one, so we never silently default it to gemini_api.
+    raw_agent_provider = str(normalized.get("agentProvider") or "").strip()
+    normalized["agentProvider"] = normalize_provider(raw_agent_provider) if raw_agent_provider else ""
+    try:
+        rounds = int(normalized.get("agentToolRounds"))
+    except (TypeError, ValueError):
+        rounds = int(DEFAULT_LLM_CONFIG["agentToolRounds"])
+    # 0 = unlimited (no round cap); otherwise clamp to a sane range.
+    normalized["agentToolRounds"] = 0 if rounds <= 0 else min(500, rounds)
     normalized["openrouterRoutingByModel"] = normalize_openrouter_routing_by_model(normalized.get("openrouterRoutingByModel"))
     normalized["ttsProvider"] = normalize_tts_provider(normalized.get("ttsProvider"))
     normalized["ttsLanguage"] = str(normalized.get("ttsLanguage") or DEFAULT_LLM_CONFIG["ttsLanguage"]).strip()
@@ -87,6 +103,8 @@ def normalize_llm_config(config: dict[str, Any]) -> dict[str, Any]:
         normalized["ttsPitch"] = DEFAULT_LLM_CONFIG["ttsPitch"]
     _normalize_tts_volume(normalized, DEFAULT_LLM_CONFIG)
     _normalize_elevenlabs_controls(normalized, DEFAULT_LLM_CONFIG)
+    if not isinstance(normalized.get("ttsByProvider"), dict):
+        normalized["ttsByProvider"] = {}
     return normalized
 
 
@@ -95,7 +113,8 @@ def normalize_chat_config(config: dict[str, Any]) -> dict[str, Any]:
     normalized.update(config)
     normalized["provider"] = normalize_provider(normalized.get("provider"))
     normalized["openrouterRoutingByModel"] = normalize_openrouter_routing_by_model(normalized.get("openrouterRoutingByModel"))
-    if normalized["provider"] != "gemini_api":
+    # Gemini (grounding nativo) e OpenRouter (plugin web) suportam pesquisa nativa.
+    if normalized["provider"] not in {"gemini_api", "openrouter"}:
         normalized["nativeSearchMode"] = "off"
     return normalized
 
@@ -146,11 +165,15 @@ def normalize_voice_config(config: dict[str, Any]) -> dict[str, Any]:
     normalized["sttProvider"] = normalize_stt_provider(normalized.get("sttProvider"))
     normalized["ttsProvider"] = normalize_tts_provider(normalized.get("ttsProvider"))
     normalized["speakTerminalEvents"] = bool(normalized.get("speakTerminalEvents", True))
+    normalized["callMode"] = bool(normalized.get("callMode", False))
     normalized["ttsStreaming"] = bool(normalized.get("ttsStreaming", False))
     normalized["ttsPrompt"] = str(normalized.get("ttsPrompt") or DEFAULT_VOICE_CONFIG.get("ttsPrompt") or "").strip()
     normalized["inputDeviceId"] = str(normalized.get("inputDeviceId") or "").strip()
     normalized["inputDeviceLabel"] = str(normalized.get("inputDeviceLabel") or "").strip()
     normalized["inputDeviceSource"] = str(normalized.get("inputDeviceSource") or "sounddevice").strip()
+    normalized["secondOutputEnabled"] = bool(normalized.get("secondOutputEnabled", False))
+    normalized["secondOutputDeviceId"] = str(normalized.get("secondOutputDeviceId") or "").strip()
+    normalized["secondOutputDeviceLabel"] = str(normalized.get("secondOutputDeviceLabel") or "").strip()
     try:
         normalized["ttsSpeed"] = float(normalized.get("ttsSpeed") or DEFAULT_VOICE_CONFIG["ttsSpeed"])
     except (TypeError, ValueError):
@@ -197,11 +220,10 @@ def normalize_connections_config(config: dict[str, Any]) -> dict[str, Any]:
     """Normalize global feature toggles owned by the Connections tab."""
     normalized = dict(DEFAULT_CONNECTIONS)
     normalized.update(config)
-    for key in ("tts", "stt", "vad", "ptt", "stopHotkey", "vts", "discord", "discordSpeak", "discordListen", "omni", "visao"):
+    for key in ("tts", "stt", "vad", "ptt", "stopHotkey", "discord", "localHands", "visao"):
         normalized[key] = bool(normalized.get(key))
     normalized["pttKey"] = str(normalized.get("pttKey") or DEFAULT_CONNECTIONS["pttKey"]).strip() or DEFAULT_CONNECTIONS["pttKey"]
     normalized["stopKey"] = str(normalized.get("stopKey") or DEFAULT_CONNECTIONS["stopKey"]).strip() or DEFAULT_CONNECTIONS["stopKey"]
-    normalized["omniUrl"] = normalize_omni_base_url(normalized.get("omniUrl"))
     return normalized
 
 
@@ -330,6 +352,11 @@ async def get_voice_input_devices() -> dict[str, Any]:
     return list_input_devices()
 
 
+@router.get("/api/config/voice/output-devices")
+async def get_voice_output_devices() -> dict[str, Any]:
+    return list_output_devices()
+
+
 @router.get("/api/config/voice/catalog")
 async def get_voice_catalog() -> dict[str, Any]:
     catalog = copy.deepcopy(VOICE_PROVIDER_CATALOG)
@@ -361,14 +388,14 @@ async def update_connections(request: Request, payload: dict[str, Any]) -> dict[
     current.update(payload)
     saved = request.app.state.memory.set_setting("connections_config", normalize_connections_config(current))
     _sync_voice_runtime(request, saved)
+    # Liga/desliga o bot do Discord junto do toggle (idempotente; no-op sem token).
+    manager = getattr(request.app.state, "discord_bot", None)
+    if manager is not None:
+        try:
+            saved["discordBot"] = manager.apply(enabled=bool(saved.get("discord")))
+        except Exception:
+            logger.exception("Falha ao aplicar estado do bot do Discord.")
     return saved
-
-
-@router.get("/api/config/omni/status")
-async def get_omni_status(request: Request) -> dict[str, Any]:
-    connections = normalize_connections_config(request.app.state.memory.get_setting("connections_config", dict(DEFAULT_CONNECTIONS)))
-    status = omni_status(str(connections.get("omniUrl") or ""))
-    return {"enabled": bool(connections.get("omni")), **status}
 
 
 @router.get("/api/config/portabilidade")

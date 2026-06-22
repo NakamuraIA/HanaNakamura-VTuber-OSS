@@ -13,16 +13,12 @@ from hana_agent_oss.memory.store import MemoryStore
 
 
 from hana_agent_oss.paths import ATTACHMENTS_DIR as DEFAULT_ATTACHMENT_ROOT
-ATTACHMENT_REFERENCE_PATTERN = re.compile(
-    r"\b(pdf|anexo|anexos|arquivo|documento|imagem|foto|audio|áudio|video|vídeo|planilha)\b",
-    re.IGNORECASE,
-)
-ATTACHMENT_REFERENCE_GROUPS = {
-    "image": re.compile(r"\b(imagem|foto)\b", re.IGNORECASE),
-    "audio": re.compile(r"\b(audio|Ã¡udio)\b", re.IGNORECASE),
-    "video": re.compile(r"\b(video|vÃ­deo)\b", re.IGNORECASE),
-    "document": re.compile(r"\b(pdf|documento|planilha)\b", re.IGNORECASE),
-}
+
+
+# NOTE: keyword-based attachment detection was intentionally REMOVED. The user
+# forbids word triggers (typing "arquivo"/"áudio"/"imagem" must never pull a stored
+# media file into a turn). Attachments enter a turn only when actually uploaded, or
+# via an explicit tag/regex if a reuse feature is ever added.
 
 
 def now_utc_slug() -> str:
@@ -43,25 +39,6 @@ def decode_data_url(data_url: str) -> bytes:
         return base64.b64decode(value, validate=False)
     except binascii.Error as exc:
         raise ValueError("invalid_base64_attachment") from exc
-
-
-def attachment_reference_requested(text: str) -> bool:
-    return bool(ATTACHMENT_REFERENCE_PATTERN.search(str(text or "")))
-
-
-def attachment_reference_mime_prefixes(text: str) -> tuple[str, ...]:
-    """Return MIME groups explicitly referenced by the user's current text."""
-    value = str(text or "")
-    prefixes: list[str] = []
-    if ATTACHMENT_REFERENCE_GROUPS["image"].search(value):
-        prefixes.append("image/")
-    if ATTACHMENT_REFERENCE_GROUPS["audio"].search(value):
-        prefixes.append("audio/")
-    if ATTACHMENT_REFERENCE_GROUPS["video"].search(value):
-        prefixes.append("video/")
-    if ATTACHMENT_REFERENCE_GROUPS["document"].search(value):
-        prefixes.extend(("application/pdf", "text/", "application/vnd."))
-    return tuple(prefixes)
 
 
 class AttachmentStore:

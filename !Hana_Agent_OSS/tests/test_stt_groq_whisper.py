@@ -173,7 +173,7 @@ def test_voice_text_respond_routes_manual_terminal_command(monkeypatch, tmp_path
         assert payload["text"] == "oi"
         return {
             "ok": True,
-            "text": "Oi, Nakamura.",
+            "text": "Oi, Operador.",
             "plan": {"intent": "test", "steps": []},
             "meta": {"provider": payload["provider"], "model": payload["model"]},
             "status": {"stage": "success", "detail": "test"},
@@ -187,6 +187,6 @@ def test_voice_text_respond_routes_manual_terminal_command(monkeypatch, tmp_path
     response = client.post("/api/voice/text/respond", json={"text": "oi"})
 
     assert response.status_code == 200
-    assert response.json()["assistantText"] == "Oi, Nakamura."
+    assert response.json()["assistantText"] == "Oi, Operador."
     events = client.get("/api/terminal-agent/events").json()["events"]
     assert [event["kind"] for event in events] == ["user_text", "assistant_thought", "assistant_text"]

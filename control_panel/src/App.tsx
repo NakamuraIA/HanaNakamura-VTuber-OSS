@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import "./App.css";
 import { MainLayout } from "./views/layouts/MainLayout";
+import { applyAccessibility, loadAccessibility } from "./accessibility";
 
 function App() {
   useEffect(() => {
@@ -12,6 +13,7 @@ function App() {
   document.documentElement.style.setProperty('--purple-glow', savedColor);
   document.documentElement.style.setProperty('--purple-dark', `${savedColor}40`);
   document.documentElement.style.setProperty('--bg-opacity', savedOpacity);
+  applyAccessibility(loadAccessibility());
   }, []);
 
   return <MainLayout />;

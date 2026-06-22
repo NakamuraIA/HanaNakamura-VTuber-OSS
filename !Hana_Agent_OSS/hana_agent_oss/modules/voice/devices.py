@@ -60,3 +60,51 @@ def list_input_devices() -> dict[str, Any]:
         },
         "recommendedCapture": "sounddevice",
     }
+
+
+def list_output_devices() -> dict[str, Any]:
+    """List backend-visible OUTPUT devices (playback) for the second voice output picker.
+
+    Mirrors :func:`list_input_devices` but filters on ``max_output_channels`` — used by
+    the "segunda saída de áudio" feature so the user can route Hana's TTS to a virtual
+    cable (e.g. VB-Audio CABLE Input) on top of the local speakers.
+    """
+    devices: list[dict[str, Any]] = []
+    backend_available = False
+    backend_error = ""
+
+    try:
+        import sounddevice as sd  # type: ignore[import-not-found]
+
+        try:
+            default_output = sd.default.device[1]
+        except Exception:
+            default_output = None
+
+        for index, item in enumerate(sd.query_devices()):
+            max_output_channels = int(item.get("max_output_channels") or 0)
+            if max_output_channels <= 0:
+                continue
+            devices.append(
+                {
+                    "id": f"sounddevice:{index}",
+                    "label": str(item.get("name") or f"Output device {index}"),
+                    "source": "sounddevice",
+                    "isDefault": index == default_output,
+                    "available": True,
+                    "channels": max_output_channels,
+                    "sampleRate": item.get("default_samplerate"),
+                }
+            )
+        backend_available = True
+    except Exception as exc:
+        backend_error = str(exc)
+
+    return {
+        "devices": devices,
+        "backendEnumeration": {
+            "available": backend_available,
+            "optionalDependency": "sounddevice",
+            "error": backend_error,
+        },
+    }

@@ -55,10 +55,60 @@ MEMORY_CONTEXT_CHAR_BUDGET = int(os.environ.get("HANA_MEMORY_CONTEXT_CHARS", "42
 MEMORY_CONTEXT_MAX_ITEMS = int(os.environ.get("HANA_MEMORY_CONTEXT_ITEMS", "60"))       # hard cap on count
 MEMORY_CONTEXT_LINE_CHARS = int(os.environ.get("HANA_MEMORY_CONTEXT_LINE_CHARS", "600"))  # per-memory clip
 
+# Always-on user profile (likes / dislikes / personal facts). Capped per category
+# so it stays cheap on tokens but is ALWAYS present, independent of the query. This
+# is what makes Hana respect dislikes even when the message does not mention them.
+PROFILE_PER_CATEGORY = int(os.environ.get("HANA_PROFILE_PER_CATEGORY", "10"))
+
 
 def estimate_tokens(text: str) -> int:
     """Cheap tokenizer-free estimate (chars / ratio) for budget accounting."""
     return int(len(str(text or "")) / _CHARS_PER_TOKEN)
+
+
+def estimate_image_tokens(attachments: list[dict[str, Any]] | None) -> int:
+    """Rough token cost of image attachments (so the meter is honest about vision).
+
+    Most vision models bill an image as a few hundred to ~1.5k tokens depending on
+    tiling. We approximate from the decoded byte size: ~one token per ~700 bytes of
+    image, clamped to a sane window. This is for the live meter only, never billing.
+    """
+    total = 0
+    for item in attachments or []:
+        if not isinstance(item, dict):
+            continue
+        mime = str(item.get("type") or "").lower()
+        if not mime.startswith("image/"):
+            continue
+        data = str(item.get("data") or "")
+        approx_bytes = int(len(data) * 0.75) if data else 0  # base64 -> bytes
+        total += max(256, min(2000, approx_bytes // 700)) if approx_bytes else 800
+    return total
+
+
+def context_size_report(
+    sections: dict[str, str],
+    *,
+    image_tokens: int = 0,
+) -> dict[str, Any]:
+    """Measure the per-block token cost of one turn's context (the live meter).
+
+    ``sections`` maps a label (e.g. "persona", "memoria", "historico") to its raw
+    text. Returns per-block token estimates, an image line, the grand total, and a
+    one-line human summary for the terminal — turning the old guesswork about
+    "where do the 17k go" into a number Operador sees every turn.
+    """
+    blocks: dict[str, int] = {}
+    for label, text in sections.items():
+        tokens = estimate_tokens(text)
+        if tokens:
+            blocks[label] = tokens
+    if image_tokens:
+        blocks["imagem"] = int(image_tokens)
+    total = sum(blocks.values())
+    parts = " · ".join(f"{label} {tok / 1000:.1f}k" for label, tok in blocks.items())
+    summary = f"🧮 contexto ~{total / 1000:.1f}k tokens — {parts}"
+    return {"blocks": blocks, "totalTokens": total, "summary": summary}
 
 
 def select_memories_for_context(
@@ -118,6 +168,162 @@ def select_memories_for_context(
     return selected
 
 
+def build_profile_block(
+    memory: MemoryStore,
+    *,
+    per_category: int = PROFILE_PER_CATEGORY,
+) -> tuple[str, list[dict[str, Any]]]:
+    """Build the always-on user profile block (likes / dislikes / personal facts).
+
+    Returns ``("", [])`` when there is nothing saved yet. This block is injected
+    on EVERY turn, separate from the query-based RAG, so Hana keeps respecting the
+    user's dislikes and uses their likes even when the current message is unrelated.
+    """
+    try:
+        items = memory.profile_memories(per_category=per_category)
+    except Exception:
+        return "", []
+    if not items:
+        return "", []
+
+    likes: list[str] = []
+    dislikes: list[str] = []
+    facts: list[str] = []
+    for item in items:
+        line = _memory_prompt_line(item, max_chars=MEMORY_CONTEXT_LINE_CHARS)
+        if not line:
+            continue
+        category = str(item.get("category") or "")
+        if category == "preference_like":
+            likes.append(line)
+        elif category == "preference_dislike":
+            dislikes.append(line)
+        else:
+            facts.append(line)
+
+    sections: list[str] = []
+    if likes:
+        sections.append("GOSTA / curte:\n" + "\n".join(f"- {line}" for line in likes))
+    if dislikes:
+        sections.append("NÃO GOSTA / evite:\n" + "\n".join(f"- {line}" for line in dislikes))
+    if facts:
+        sections.append("FATOS PESSOAIS:\n" + "\n".join(f"- {line}" for line in facts))
+    if not sections:
+        return "", []
+
+    block = (
+        "[PERFIL DO USUÁRIO — vale sempre, mesmo que a mensagem atual não mencione]\n"
+        "Respeite isto em todas as respostas. NUNCA ofereça, sugira ou insista no que "
+        "está em 'NÃO GOSTA'. Use o que está em 'GOSTA' para agradar e personalizar. "
+        "Se algo aqui mudar na conversa, atualize/corrija a memória.\n"
+        + "\n\n".join(sections)
+    )
+    return block, items
+
+
+RECENT_ACTIVITY_HOURS = 48
+RECENT_ACTIVITY_MAX_LINES = 40
+RECENT_ACTIVITY_CHAR_BUDGET = 4500
+
+
+def build_recent_activity_block(memory: MemoryStore) -> str:
+    """Build the always-on block of Hana's recent tool activity on the PC.
+
+    Tool calls/results are filtered OUT of the conversational history on purpose
+    (they would pollute the dialogue), but that made Hana forget her own past work:
+    a task done mostly through tools (e.g. writing a landing page) left no trace in
+    her context, so in the next conversation she had no idea where she stopped.
+
+    This block re-injects that work deterministically from the persisted events —
+    deliberately generous with tokens, because Operador prefers spending tokens
+    over Hana getting lost.
+    """
+    try:
+        raw_events = memory.recent_events(limit=400, channel=CHANNEL_TERMINAL_AGENT)
+    except Exception:
+        return ""
+    if not raw_events:
+        return ""
+
+    from datetime import datetime, timedelta, timezone
+
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=RECENT_ACTIVITY_HOURS)
+    lines: list[str] = []
+    used = 0
+    # recent_events returns oldest->newest; walk newest first so the budget
+    # favors the most recent actions, then restore chronological order.
+    for event in reversed(raw_events):
+        metadata = event.get("metadata") if isinstance(event.get("metadata"), dict) else {}
+        kind = str(metadata.get("kind") or "")
+        if kind not in {"tool_call", "tool_result"}:
+            continue
+        content = str(event.get("content") or "").strip().replace("\n", " ")
+        if not content:
+            continue
+        stamp = ""
+        try:
+            ts = datetime.fromisoformat(str(event.get("created_at") or ""))
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            if ts < cutoff:
+                break
+            stamp = ts.astimezone().strftime("%d/%m %H:%M")
+        except ValueError:
+            pass
+        tool = str(metadata.get("toolName") or "ferramenta")
+        status = str(metadata.get("status") or "")
+        marker = {"success": "OK", "failed": "FALHOU"}.get(status, "...")
+        if len(content) > 220:
+            content = content[:220] + "..."
+        line = f"- {stamp} · {tool} [{marker}] {content}"
+        cost = len(line) + 1
+        if used + cost > RECENT_ACTIVITY_CHAR_BUDGET or len(lines) >= RECENT_ACTIVITY_MAX_LINES:
+            break
+        lines.append(line)
+        used += cost
+
+    if not lines:
+        return ""
+    lines.reverse()
+    return (
+        "[ATIVIDADE RECENTE NO PC — o que VOCÊ (Hana) já fez com ferramentas nas últimas 48h]\n"
+        "Este é o registro REAL das suas últimas ações (comandos, arquivos escritos, lembretes). "
+        "Use-o para retomar trabalhos de onde parou: se a Operador pedir para 'continuar' algo, "
+        "procure aqui os caminhos e o que já foi feito ANTES de perguntar ou procurar do zero. "
+        "Não refaça o que já está OK aqui; conserte o que está FALHOU.\n"
+        + "\n".join(lines)
+    )
+
+
+def build_latest_diary_block(memory: MemoryStore) -> tuple[str, dict[str, Any] | None]:
+    """Always-on continuity block with Hana's most recent sleep-cycle diary.
+
+    Without this, every new conversation starts cold even though the diary exists:
+    the query-based RAG only finds it when the user's message happens to match.
+    """
+    try:
+        from hana_agent_oss.memory.sleep import latest_episode
+
+        episode = latest_episode(memory)
+    except Exception:
+        return "", None
+    if not episode:
+        return "", None
+    text = str(episode.get("text") or "").strip()
+    if not text:
+        return "", None
+    if len(text) > 1500:
+        text = text[:1500].rstrip() + "..."
+    block = (
+        "[SEU ÚLTIMO DIÁRIO — continuidade entre conversas]\n"
+        "Este é o resumo que VOCÊ (Hana) escreveu do período anterior. Use-o para dar "
+        "continuidade natural (assuntos, projetos, pendências) sem precisar perguntar "
+        "o que estavam fazendo. Não recite o diário; apenas aja como quem lembra.\n"
+        + text
+    )
+    return block, episode
+
+
 def build_memory_context_block(
     memory: MemoryStore,
     *,
@@ -127,30 +333,55 @@ def build_memory_context_block(
 ) -> tuple[str, list[dict[str, Any]]]:
     """Build the system memory block + the list of memories actually injected.
 
-    Returns ``("", [])`` when there is nothing to inject. The returned memory
-    list is exposed to the Control Panel so the user can SEE exactly what Hana
-    received this turn (no more guessing whether she "remembered").
+    Combines the always-on user profile (likes/dislikes/facts) with the
+    query-based RAG selection. Returns ``("", [])`` when there is nothing to
+    inject. The returned memory list is exposed to the Control Panel so the user
+    can SEE exactly what Hana received this turn (no more guessing).
     """
+    profile_block, profile_items = build_profile_block(memory)
+    profile_ids = {str(item.get("id") or "") for item in profile_items}
+    diary_block, diary_item = build_latest_diary_block(memory)
+    if diary_item is not None:
+        profile_ids.add(str(diary_item.get("id") or ""))
+
     selected = select_memories_for_context(
         memory, query=query, char_budget=char_budget, max_items=max_items
     )
-    if not selected:
-        return "", []
     lines = []
+    rag_items: list[dict[str, Any]] = []
     for item in selected:
+        # Avoid repeating profile/diary memories already injected in their own blocks.
+        if str(item.get("id") or "") in profile_ids:
+            continue
         line = _memory_prompt_line(item, max_chars=MEMORY_CONTEXT_LINE_CHARS)
         if line:
             lines.append(f"- {line}")
-    if not lines:
+            rag_items.append(item)
+
+    blocks: list[str] = []
+    if profile_block:
+        blocks.append(profile_block)
+    if diary_block:
+        blocks.append(diary_block)
+    if lines:
+        blocks.append(
+            "[MEMÓRIA PERSISTENTE DA HANA — use estas lembranças quando forem relevantes]\n"
+            "Estas são coisas que você já salvou/aprendeu antes. Use-as para manter "
+            "continuidade e NÃO chute fatos que estão aqui. Se algo aqui responde a "
+            "pergunta, use; não invente versão diferente.\n"
+            + "\n".join(lines)
+        )
+    # Always-on recent tool activity, so Hana can resume past work (anti-perdida).
+    try:
+        activity_block = build_recent_activity_block(memory)
+    except Exception:
+        activity_block = ""
+    if activity_block:
+        blocks.append(activity_block)
+    if not blocks:
         return "", []
-    block = (
-        "[MEMÓRIA PERSISTENTE DA HANA — use estas lembranças quando forem relevantes]\n"
-        "Estas são coisas que você já salvou/aprendeu antes. Use-as para manter "
-        "continuidade e NÃO chute fatos que estão aqui. Se algo aqui responde a "
-        "pergunta, use; não invente versão diferente.\n"
-        + "\n".join(lines)
-    )
-    return block, selected
+    injected = profile_items + ([diary_item] if diary_item is not None else []) + rag_items
+    return "\n\n".join(blocks), injected
 
 
 # --- Channels ------------------------------------------------------------- #
@@ -165,13 +396,21 @@ ALL_CHANNELS = (CHANNEL_CONTROL_CENTER, CHANNEL_TERMINAL_AGENT, CHANNEL_DISCORD)
 
 _VOICE_STYLE_HINT = (
     "\n\n[INSTRUÇÃO DE CANAL - VOZ]\n"
-    "REGRAS IMPORTANTES:\n"
-    "- Respostas CURTAS (1-4 frases no máximo). Tom natural de conversa falada, como se você também estivesse na call assistindo a tela.\n"
-    "- Reaja ao que está na tela (visão) + ao que as pessoas (incluindo a Nakamura) estão falando.\n"
-    "- Quando fizer sentido, dirija-se diretamente à Nakamura pelo nome (ela é a usuária principal e criadora).\n"
-    "- Nao finalize toda fala com pergunta de suporte. Continue a conversa com reacao propria, provocacao leve, observacao ou proximo passo concreto.\n"
-    "- Se Nakamura reclamar que voce parece robotica, mude o tom imediatamente; nao responda com promessa burocratica nem pergunte como melhorar.\n"
-    "- Evite frases de assistente generica como 'como posso ajudar', 'o que voce precisa agora' ou 'estou pronta para ajudar'.\n"
+    "REGRA #1 (A MAIS IMPORTANTE): SEJA MUITO CURTA. No MÁXIMO 2 frases curtas "
+    "(~30 palavras). Isso é falado em voz alta e cada palavra custa crédito de TTS — "
+    "ser prolixa é PROIBIDO e desperdiça dinheiro. Responda como gente fala numa call, "
+    "não como quem escreve um texto.\n"
+    "- NUNCA faça listas, enumerações (1., 2., 3.), planos passo-a-passo, resumos longos "
+    "ou explicações detalhadas POR VOZ. Se o assunto exigir detalhe/código/passos, diga "
+    "em 1 frase o essencial e ofereça detalhar no CHAT se ela quiser — não despeje tudo no áudio.\n"
+    "- Vá direto ao ponto: corte saudações longas, preâmbulos e enrolação.\n"
+    "REGRAS DE TOM:\n"
+    "- Tom natural de conversa falada, como se você estivesse na call assistindo a tela.\n"
+    "- Reaja ao que está na tela (visão) + ao que as pessoas (incluindo a Operador) estão falando.\n"
+    "- Quando fizer sentido, dirija-se diretamente à Operador pelo nome.\n"
+    "- Nao finalize toda fala com pergunta de suporte. Reaja, provoque de leve ou dê o próximo passo em 1 frase.\n"
+    "- Se Operador reclamar que voce parece robotica, mude o tom imediatamente; nao responda com promessa burocratica.\n"
+    "- Evite frases de assistente generica como 'como posso ajudar' ou 'estou pronta para ajudar'.\n"
     "- NÃO use markdown, blocos de código, tabelas, listas ou links. Sua resposta vai direto pro TTS.\n"
     "\n"
     "MEMÓRIA E CONTINUIDADE DA CONVERSA (MUITO IMPORTANTE):\n"
@@ -189,7 +428,7 @@ _VOICE_STYLE_HINT = (
 
 _CHAT_STYLE_HINT = (
     "\n\n[INSTRUÇÃO DE CANAL - CHAT DE TEXTO: rico, formatado, em personagem]\n"
-    "A Nakamura digitou no painel de chat. Este é o canal VISUAL e RICO — bem diferente "
+    "A Operador digitou no painel de chat. Este é o canal VISUAL e RICO — bem diferente "
     "da voz/terminal (que são fala curta sem formatação). Aqui você TEM tela: capriche.\n"
     "FORMATAÇÃO (use de verdade, não tenha medo):\n"
     "- Escreva em Markdown bem formatado: **negrito**, *itálico*, `código`, listas, tabelas, "
@@ -211,34 +450,54 @@ _CHAT_STYLE_HINT = (
 
 # Discord voice call style: optimized for ongoing group conversation in voice channel
 # while multiple people watch shared screen and chat casually. Forces short spoken-style
-# replies and completely forbids any mention of the creator (Nakamura).
-_DISCORD_CALL_STYLE_HINT = (
-    "\n\n[INSTRUÇÃO ESPECÍFICA DE CANAL: DISCORD VOICE CALL]\n"
-    "Você está em uma call de voz no Discord com várias pessoas assistindo a tela (jogo, stream, desktop etc) e conversando.\n"
-    "A Nakamura está acordada e no comando. Você pode se dirigir a ela pelo nome quando for natural.\n"
-    "REGRAS OBRIGATÓRIAS DE RESPOSTA:\n"
-    "- Falas CURTÍSSIMAS: máximo 1 ou 2 frases curtas. Ideal para conversa fluida em voz.\n"
-    "- Tom 100% natural de conversa entre amigos na call. Reaja ao que está acontecendo na tela + ao que o pessoal (e a Nakamura) acabou de falar.\n"
-    "- Mantenha bom nível de conversa: presente, curiosa, com reações rápidas e humor leve quando couber. Sem monólogo, sem enrolação.\n"
-    "- Não quebre a imersão do grupo: converse normalmente com o pessoal como se você também estivesse lá assistindo junto.\n"
-    "- Nao encerre toda fala com pergunta de suporte. Use reacao propria, continuidade, provocacao leve ou uma decisao curta.\n"
-    "- Se alguem reclamar que voce esta robotica, ajuste a fala na hora; nao responda como atendimento ao cliente.\n"
+# replies and completely forbids any mention of the creator (Operador).
+_DISCORD_TEXT_STYLE_HINT = (
+    "\n\n[INSTRUÇÃO ESPECÍFICA DE CANAL: DISCORD (CHAT DE TEXTO PRIVADO)]\n"
+    "Você está conversando por TEXTO no Discord, em um chat PRIVADO só seu com a Operador "
+    "(o bot é privado dela). Trate sempre quem fala como a Operador.\n"
+    "FORMATAÇÃO (markdown do Discord):\n"
+    "- Use a formatação do Discord quando ajudar: **negrito**, *itálico*, `código inline`, "
+    "blocos ```com linguagem```, listas com - , citações com >.\n"
+    "- NÃO use tabelas markdown (o Discord não renderiza) — prefira listas.\n"
+    "- Para código/arquivos grandes, mande em bloco ```; o sistema converte automaticamente "
+    "em anexo quando passar do limite, então não se preocupe em cortar você mesma.\n"
+    "TAMANHO:\n"
+    "- O Discord tem limite de ~2000 caracteres por mensagem, mas o sistema QUEBRA respostas "
+    "longas em várias mensagens automaticamente. Então responda no tamanho natural que o "
+    "assunto pedir — completa quando precisar, curta quando for papo simples. Não trunque.\n"
+    "TOM:\n"
+    "- Natural, presente, com a personalidade da Hana. Conversa de verdade, não atendimento.\n"
+    "- Não encerre toda mensagem com pergunta de suporte.\n"
     "\n"
-    "MEMÓRIA E CONTINUIDADE (CRÍTICO):\n"
-    "- NÃO repita frases, piadas ou comentários que você ou o grupo já fez recentemente.\n"
-    "- SEMPRE continue o mesmo tópico/assunto da troca anterior. Não reinicie a conversa do zero.\n"
-    "- Mantenha o fio da meada da call. Lembre o que foi falado há pouco e responda em cima disso.\n"
-    "\n"
-    "MEMÓRIA LONGA: Use <salvar_memoria> para fatos importantes. O texto salvo nunca é falado."
+    "CONTINUIDADE: siga o fio da conversa; não repita o que já foi dito nem reinicie do zero.\n"
+    "MEMÓRIA LONGA: use <salvar_memoria> para fatos importantes."
 )
 
 
-def channel_style_hint(channel: str) -> str:
+_CALL_MODE_HINT = (
+    "\n\n[INSTRUÇÃO DE CANAL - VOZ EM MODO CALL (várias pessoas)]\n"
+    "Você está OUVINDO uma call com várias pessoas (áudio via cabo virtual). A fala que "
+    "chega NÃO é necessariamente da Operador — pode ser qualquer participante.\n"
+    "REGRAS OBRIGATÓRIAS:\n"
+    "- NÃO assuma que quem falou é a Operador. Só trate como ela se o conteúdo deixar claro "
+    "(ela te chama pelo nome, dá um comando direto, ou fala de algo que só ela saberia).\n"
+    "- Comporte-se como uma PARTICIPANTE da call: converse com o grupo, responda quem falou, "
+    "reaja ao papo coletivo. Não direcione tudo à Operador nem fique pedindo comando a ela.\n"
+    "- Se não souber quem falou, responda de forma geral pro grupo, sem chamar ninguém pelo nome errado.\n"
+    "- Falas CURTAS (1-2 frases), tom natural de call entre amigos. Sem markdown (vai pro TTS).\n"
+    "- Não invente que a Operador disse/fez algo que veio de outra pessoa.\n"
+    "- Continue o fio da conversa do grupo; não reinicie do zero nem repita o que já foi dito.\n"
+    "\n"
+    "MEMÓRIA LONGA: use <salvar_memoria> para fatos importantes (inclusive de outras pessoas da call). O texto salvo nunca é falado."
+)
+
+
+def channel_style_hint(channel: str, *, call_mode: bool = False) -> str:
     """Return the dynamic style instruction for the given channel."""
     if channel == CHANNEL_DISCORD:
-        return _DISCORD_CALL_STYLE_HINT
+        return _DISCORD_TEXT_STYLE_HINT
     if channel in {"voice", CHANNEL_TERMINAL_AGENT}:
-        return _VOICE_STYLE_HINT
+        return _CALL_MODE_HINT if call_mode else _VOICE_STYLE_HINT
     return _CHAT_STYLE_HINT
 
 
@@ -254,6 +513,38 @@ def truncate_for_voice(text: str, max_chars: int = VOICE_MESSAGE_MAX_CHARS) -> s
     if len(value) <= max_chars:
         return value
     return value[:max_chars].rstrip() + "..."
+
+
+# Signatures of terminal/system EVENT lines. Weak models autocomplete the running
+# transcript and emit the next "event line" as if it were dialogue (it then gets spoken
+# by TTS and saved, re-polluting future turns). These phrases never belong in a real
+# reply, so we cut the response at the first one.
+_LEAKED_EVENT_RE = __import__("re").compile(
+    r"(?is)\b("
+    r"PTT\s+pressionado"
+    r"|Gravando\s+(do\s+microfone|fala\s+da\s+call)"
+    r"|Audio\s+finalizado"
+    r"|Mensagem\s+recebida\.\s*Gerando\s+resposta"
+    r"|Enviando\s+para\s+Groq\s+Whisper"
+    r"|TTS\s+(Elevenlabs|Edge|finalizada|interrompida)"
+    r"|Runtime\s+(voltou|de\s+voz)"
+    r"|\bNaka\s+Naka\s*\(\d{5,}\)\s*:"  # model hallucinating the next Discord user line
+    r"|\(\d{15,}\)\s*:"                  # any "(<discord id>):" speaker label
+    r")"
+)
+
+
+def strip_leaked_terminal_events(text: str) -> str:
+    """Cut a model reply at the first leaked terminal/system event signature.
+
+    Everything from that point on is the model parroting the transcript, not an answer.
+    """
+    if not text:
+        return text
+    match = _LEAKED_EVENT_RE.search(text)
+    if match:
+        return text[: match.start()].rstrip(" \n\t-—:·")
+    return text
 
 
 # --- Unified history builder ---------------------------------------------- #
@@ -296,7 +587,7 @@ def build_unified_history(
     list[dict[str, str]]
         Each item has ``role`` (``"user"`` or ``"model"``) and ``content``.
     """
-    is_voice_like = channel in {"voice", CHANNEL_TERMINAL_AGENT, CHANNEL_DISCORD}
+    is_voice_like = channel in {"voice", CHANNEL_TERMINAL_AGENT}
     # For voice-like channels we now use context pairs (user + assistant)
     if is_voice_like:
         effective_limit = limit if limit is not None else VOICE_CONTEXT_LIMIT
@@ -325,6 +616,8 @@ def build_unified_history(
             "assistant_thought", "tool_call", "tool_result",
             "assistant_speech",  # do not pollute conversation history with TTS meta logs like "TTS gerou audio"
             "provider_error",  # technical failures are UI diagnostics, not conversational turns
+            "context_audit",  # the live context meter is diagnostics, never a conversational turn
+            "provider_telemetry",  # served-provider/speed telemetry is diagnostics, not dialogue
         }:
             continue
         filtered.append(event)
@@ -342,6 +635,9 @@ def build_unified_history(
     for event in trimmed:
         role = _role_to_api(event.get("role", "user"))
         content = str(event.get("content") or "").strip()
+        # Scrub any previously-saved leaked event text so it can't re-pollute the model.
+        if role == "model":
+            content = strip_leaked_terminal_events(content).strip()
         if is_voice_like:
             content = truncate_for_voice(content)
         if not content:
@@ -367,6 +663,11 @@ def build_unified_history(
             last_user_texts = " ".join(
                 m.get("content", "") for m in messages[-8:] if m.get("role") in ("user", "model")
             )
+            # Always-on user profile (likes/dislikes/facts) first, so dislikes are
+            # respected even when the live topic is unrelated.
+            profile_block, profile_items = build_profile_block(memory)
+            profile_ids = {str(item.get("id") or "") for item in profile_items}
+
             selected = select_memories_for_context(
                 memory,
                 query=last_user_texts,
@@ -374,9 +675,13 @@ def build_unified_history(
                 max_items=LONGTERM_MEMORY_INJECTION_LIMIT,
             )
 
-            if selected:
-                clean_lines = [_memory_prompt_line(m) for m in selected]
-                memory_lines = [f"- {line}" for line in clean_lines if line]
+            memory_lines = [
+                f"- {line}"
+                for m in selected
+                if str(m.get("id") or "") not in profile_ids
+                and (line := _memory_prompt_line(m))
+            ]
+            if memory_lines:
                 rag_block = (
                     "\n\n[MEMÓRIA LONGA PERSISTENTE - USE ESTAS INFORMAÇÕES QUANDO FOREM RELEVANTES]\n"
                     "Estas são lembranças importantes que você mesma salvou antes durante a call. "
@@ -384,6 +689,9 @@ def build_unified_history(
                     + "\n".join(memory_lines)
                 )
                 messages.insert(0, {"role": "system", "content": rag_block})
+            # Profile goes in last so it ends up FIRST in the message list.
+            if profile_block:
+                messages.insert(0, {"role": "system", "content": "\n\n" + profile_block})
         except Exception:
             # Never break the voice turn because of memory retrieval failure
             pass

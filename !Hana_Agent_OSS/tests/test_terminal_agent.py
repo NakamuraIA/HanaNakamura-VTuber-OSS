@@ -19,17 +19,17 @@ def test_tts_readable_sanitizes_markdown_code_links_and_punctuation() -> None:
 
 def test_tts_readable_never_speaks_memory_save_blocks() -> None:
     text = (
-        "Amei o seu guia, Nakamura!\n\n"
-        '<salvar_memoria>{"text": "Nakamura criou um plano de baus", '
+        "Amei o seu guia, Operador!\n\n"
+        '<salvar_memoria>{"text": "Operador criou um plano de baus", '
         '"importance": "high", "category": "game_state"}</salvar_memoria>'
     )
     verbalized = (
-        'Amei o seu guia, Nakamura! salvar memoria "text": "Nakamura criou um plano de baus", '
+        'Amei o seu guia, Operador! salvar memoria "text": "Operador criou um plano de baus", '
         '"importance": "high", "category": "game_state" salvar memoria'
     )
 
-    assert sanitize_tts_text(text) == "Amei o seu guia, Nakamura!"
-    assert sanitize_tts_text(verbalized) == "Amei o seu guia, Nakamura!"
+    assert sanitize_tts_text(text) == "Amei o seu guia, Operador!"
+    assert sanitize_tts_text(verbalized) == "Amei o seu guia, Operador!"
 
 
 def test_edge_tts_text_is_split_for_lower_first_audio_latency() -> None:

@@ -18,6 +18,7 @@ from hana_agent_oss.modules.voice.tts_edge import EdgeTTSResult, TTSConfiguratio
 from hana_agent_oss.modules.voice.tts_readable import sanitize_tts_text
 
 ELEVENLABS_TTS_URL = "https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
+ELEVENLABS_TTS_STREAM_URL = "https://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream"
 DEFAULT_ELEVENLABS_VOICE = "JBFqnCBsd6RMkjVDRZzb"
 DEFAULT_ELEVENLABS_MODEL = "eleven_flash_v2_5"
 DEFAULT_ELEVENLABS_LANGUAGE = "pt"
@@ -91,6 +92,48 @@ class ElevenlabsTTSProvider:
             raise TTSConfigurationError("Elevenlabs TTS returned empty audio.")
 
         return self._result(clean_text, audio)
+
+    async def stream_audio_chunks(self, text: str):
+        """Yield ElevenLabs MP3 chunks as soon as the /stream endpoint sends them.
+
+        Lets the runtime start playing the first words while the rest is still
+        generated, cutting time-to-first-audio. Same payload as synthesize().
+        """
+        clean_text = sanitize_tts_text(text)
+        if not clean_text:
+            return
+
+        api_key = os.environ.get("ELEVENLABS_API_KEY")
+        if not api_key:
+            raise TTSConfigurationError(
+                "ELEVENLABS_API_KEY is required for Elevenlabs TTS. "
+                "Get your API key at https://elevenlabs.io/app/settings/api-keys"
+            )
+
+        voice_id = str(self.voice or "").strip() or DEFAULT_ELEVENLABS_VOICE
+        url = ELEVENLABS_TTS_STREAM_URL.format(voice_id=quote(voice_id, safe=""))
+        payload = self._build_payload(clean_text)
+        headers = {
+            "Accept": "audio/mpeg",
+            "Content-Type": "application/json",
+            "xi-api-key": api_key,
+        }
+
+        async with httpx.AsyncClient(timeout=ELEVENLABS_TIMEOUT_SECONDS) as client:
+            async with client.stream(
+                "POST",
+                url,
+                headers=headers,
+                params={"output_format": ELEVENLABS_OUTPUT_FORMAT},
+                json=payload,
+            ) as response:
+                if response.status_code >= 400:
+                    body = await response.aread()
+                    detail = body.decode("utf-8", errors="replace")[:400] if body else f"HTTP {response.status_code}"
+                    raise TTSConfigurationError(f"Elevenlabs TTS streaming failed: {detail}")
+                async for chunk in response.aiter_bytes():
+                    if chunk:
+                        yield chunk
 
     def _build_payload(self, clean_text: str) -> dict[str, Any]:
         """Build request body for Elevenlabs TTS API."""
