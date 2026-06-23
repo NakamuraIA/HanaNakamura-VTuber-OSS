@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="assets/banner.png" alt="Hana Nakamura — VTuber OSS" width="100%" />
+<img src="assets/banner.png" alt="Hana Operador — VTuber OSS" width="100%" />
 
 <br/><br/>
 
@@ -48,7 +48,7 @@ Tudo na _sua_ máquina, sob o _seu_ controle.
 ## ⚡ O que é isso?
 
 **Hana Agent OSS** é um framework de agente multimodal **local** construído em volta da
-**Hana Nakamura**.
+**Hana Operador**.
 
 O projeto **não é mais VTuber-first**. O avatar virou só **uma interface opcional** —
 um subagente, uma roupa. O produto de verdade é o **Agent Core**: **um único backend**
@@ -349,7 +349,7 @@ cargo check
 
 O código-fonte é licenciado sob **AGPL-3.0-only**. Veja [LICENSE](LICENSE).
 
-A identidade **Hana Nakamura**, a marca oficial, os assets do personagem e a mídia
+A identidade **Hana Operador**, a marca oficial, os assets do personagem e a mídia
 promocional oficial são protegidos separadamente pela política de marca do projeto.
 Veja [NOTICE](NOTICE), [TRADEMARK.md](TRADEMARK.md) e
 [assets/LICENSE.md](assets/LICENSE.md).
