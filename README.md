@@ -1,196 +1,321 @@
-﻿# Hana Agent OSS
+<div align="center">
 
-Hana Agent OSS is a local multimodal agent framework built around Hana
-Operador.
+<img src="assets/banner.png" alt="Hana Nakamura — VTuber OSS" width="100%" />
 
-The project is no longer VTuber-first. The VTuber surface is now an optional
-interface or subagent. The product is the Agent Core: one backend that can
-coordinate tools, memory, channels, media modules, MCP
-providers and specialized subagents.
+<br/><br/>
 
-## Active Architecture
+# 🌸 Hana Agent OSS
 
-```txt
-main.py
-  -> starts and supervises the local stack
+### Um agente multimodal local. Uma só mente. Infinitas formas.
 
-!Hana_Agent_OSS/
-  -> backend, Agent Core, API, tools, memory and capability registries
+**Desktop · Código · Mídia · Voz · VTuber · NPC · Orquestrador**
+Tudo na _sua_ máquina, sob o _seu_ controle.
 
-control_panel/
-  -> React/Tauri frontend
+<br/>
+
+![status](https://img.shields.io/badge/status-em%20evolução-ff5fa2?style=for-the-badge)
+![local first](https://img.shields.io/badge/local--first-100%25-22d3ee?style=for-the-badge)
+![python](https://img.shields.io/badge/Python-3.11+-3776AB?style=for-the-badge&logo=python&logoColor=white)
+![react](https://img.shields.io/badge/React-Tauri-61DAFB?style=for-the-badge&logo=react&logoColor=black)
+![rust](https://img.shields.io/badge/Rust-Tauri-000000?style=for-the-badge&logo=rust&logoColor=white)
+![license](https://img.shields.io/badge/license-AGPL--3.0-orange?style=for-the-badge)
+
+<br/>
+
+> _"Não é só um VTuber. É um cérebro que pode vestir qualquer corpo."_
+
+</div>
+
+---
+
+## 📑 Índice
+
+- [⚡ O que é isso](#-o-que-é-isso)
+- [🧬 No que a Hana pode se transformar](#-no-que-a-hana-pode-se-transformar)
+- [🧰 Linguagens & stack](#-linguagens--stack)
+- [🚀 Instalação rápida](#-instalação-rápida)
+- [▶️ Como usar](#️-como-usar)
+- [💡 Dicas](#-dicas)
+- [🎭 Criando referências de personagem](#-criando-referências-de-personagem)
+- [🗂️ Estrutura do projeto](#️-estrutura-do-projeto)
+- [🧠 Backend / Voz / Memória / MCP](#-backend--o-agent-core)
+- [🛠️ Checks de desenvolvimento](#️-checks-de-desenvolvimento)
+- [📚 Documentação](#-documentação)
+- [⚖️ Licença e marca](#️-licença-e-marca)
+
+---
+
+## ⚡ O que é isso?
+
+**Hana Agent OSS** é um framework de agente multimodal **local** construído em volta da
+**Hana Nakamura**.
+
+O projeto **não é mais VTuber-first**. O avatar virou só **uma interface opcional** —
+um subagente, uma roupa. O produto de verdade é o **Agent Core**: **um único backend**
+que coordena ferramentas, memória, canais, módulos de mídia, provedores MCP e
+subagentes especializados.
+
+Você dá uma mente para a Hana. Ela decide que corpo usar.
+
+---
+
+## 🧬 No que a Hana pode se transformar
+
+| 🎭 Forma | O que ela vira |
+| --- | --- |
+| 🖥️ **Desktop Agent** | Fluxos locais, arquivos e ferramentas de sistema — com portões de permissão. |
+| 💻 **Coding Agent** | Navega no projeto, edita, roda testes e faz loops de review. |
+| 🎨 **Media Agent** | Imagem, música, áudio, vídeo e pipelines criativos. |
+| 🌸 **VTuber Interface** | Avatar, voz e expressões — camada opcional. |
+| 🎮 **Game NPC** | Subcérebro especializado plugado nas APIs do jogo. |
+| 🧠 **Agent Orchestrator** | Controla servidores MCP e outros agentes externos. |
+
+---
+
+## 🧰 Linguagens & stack
+
+| Camada | Tecnologia |
+| --- | --- |
+| 🐍 **Backend / Agent Core** | Python 3.11+ · FastAPI · WebSockets · SQLite (+ FTS) |
+| ⚛️ **Frontend (Control Panel)** | React · TypeScript · Tailwind · Vite |
+| 🦀 **App desktop** | Tauri (Rust) |
+| 🎙️ **Voz** | sounddevice · pygame · Silero VAD · Groq Whisper · Edge/ElevenLabs/Gemini TTS |
+| 🔗 **Ferramentas externas** | Cliente MCP (Tavily, etc.) |
+| 🪟 **Plataforma alvo** | Windows (PowerShell) |
+
+---
+
+## 🚀 Instalação rápida
+
+> **Pré-requisitos:** Python 3.11+ · Node.js LTS · Rust (stable, p/ o app Tauri) · Git
+
+```powershell
+# 1. clonar
+git clone https://github.com/NakamuraIA/HanaNakamura-VTuber-OSS.git
+cd HanaNakamura-VTuber-OSS
+
+# 2. ambiente Python
+python -m venv .venv
+.\.venv\Scripts\activate
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+
+# 3. frontend
+cd control_panel
+npm install
+cd ..
+
+# 4. (opcional) voz, mídia, visão, SDKs de provider, busca web
+pip install -r requirements-optional.txt
+
+# 5. configurar chaves
+copy .env.example .env
 ```
 
-The old backend tree is legacy and is not part of the runtime target. New
-capabilities must be added to `!Hana_Agent_OSS/` as tools, modules,
-integrations, subbrains, plugins, external processes or MCP providers.
+Preencha no `.env` **só os providers que vai usar**. O backend sobe sem chave, mas pra
+chat real precisa de **pelo menos um LLM**:
 
-## What Hana Can Become
+- `GEMINI_API_KEY` (ou `GOOGLE_API_KEY`)
+- `OPENROUTER_API_KEY`
+- `GROQ_API_KEY` (também usado pelo STT Whisper)
 
-| Form | Description |
-| --- | --- |
-| Desktop Agent | Local workflows, files and system tools with permission gates. |
-| Coding Agent | Project navigation, edits, tests and review loops. |
-| Media Agent | Image, music, audio, video and creative pipelines. |
-| VTuber Interface | Optional avatar, voice and expression layer. |
-| Game NPC | Specialized subbrain connected through game APIs. |
-| Agent Orchestrator | Controller for MCP servers and external agents. |
+Detalhes completos em [docs/INSTALL.md](docs/INSTALL.md).
 
-## Runtime
+---
 
-Run the full local stack:
+## ▶️ Como usar
+
+Sobe a stack local inteira em **um comando**:
 
 ```powershell
 python main.py
 ```
 
-Other modes:
+- 🔌 Backend → `http://127.0.0.1:8042`
+- 🎛️ Control Panel → `http://127.0.0.1:5173` (abre sozinho no navegador)
+
+Outros modos:
 
 ```powershell
-python main.py backend-only
-python main.py frontend-only
-python main.py healthcheck
-python main.py shutdown
+python main.py backend-only    # só o backend
+python main.py frontend-only   # só o painel
+python main.py healthcheck     # ver se está vivo
+python main.py shutdown        # desligar tudo
 ```
 
-The backend listens on `http://127.0.0.1:8042`. The Control Panel dev server
-listens on `http://127.0.0.1:5173`. The default launcher reuses already-running
-healthy services instead of starting duplicate processes, waits for both
-healthchecks and opens the Control Panel in the browser unless
-`HANA_OPEN_BROWSER=0` is set.
+Depois é só abrir o **Control Panel** e conversar pelo **Chat do Controle**, ou ligar a
+voz no **Terminal Agente**.
 
-## Backend
+---
 
-The active backend is `!Hana_Agent_OSS/`.
+## 💡 Dicas
 
-It provides:
+- 🔑 **Comece simples:** uma chave de LLM já basta pra conversar. Adicione voz/mídia
+  depois.
+- 🗣️ **Voz local x Discord não rodam juntos** — em máquina fraca dá loop de áudio. Use
+  um de cada vez.
+- 🎙️ **Sem VAD = sem escuta de sala aberta.** Use **PTT** (push-to-talk) ou o teste
+  manual de microfone.
+- ⏹️ **Travou a fala?** As hotkeys de parada (F8) interrompem o TTS e devolvem o runtime
+  pro modo certo.
+- 🔒 **MCP é opt-in:** nenhum servidor liga e nenhuma ferramenta roda sem você colocar
+  na allowlist.
+- 🧹 **Memória cresce?** O comando **compact** vira eventos recentes em resumos
+  persistentes.
+- 🌑 **Tema:** o fundo é preto neutro de propósito; o acento é personalizável no painel.
+- 🚫 **Nunca commite o `.env`** — ele guarda chaves reais.
+
+---
+
+## 🎭 Criando referências de personagem
+
+Os personagens usam **pastas de personagem** para gerar imagens consistentes. Cada
+personagem vive em `data/characters/<nome>/`:
+
+```txt
+data/characters/
+  meu_personagem/
+    character.json     # identidade + prompts + referências
+    base.png           # imagem de referência "base"
+    alternate.png      # referência "alternate"
+```
+
+O `character.json` define quem é o personagem:
+
+```json
+{
+  "display_name": "Meu Personagem",
+  "identity_prompt": "Anime-style character with long hair, blue eyes, floral ornaments...",
+  "negative_prompt": "ugly, deformed, bad anatomy",
+  "default_references": ["base", "alternate"],
+  "reference_images": {
+    "base": "base.png",
+    "alternate": "alternate.png"
+  }
+}
+```
+
+**Pra criar um personagem novo:**
+
+1. Crie a pasta `data/characters/<seu_nome>/`.
+2. Jogue 1–2 imagens de referência dentro.
+3. Crie o `character.json` apontando para essas imagens em `reference_images`.
+4. Escreva o `identity_prompt` descrevendo a aparência fixa (cabelo, olhos, roupa…).
+5. Use `negative_prompt` pra cortar defeitos comuns.
+6. Liste em `default_references` quais imagens entram por padrão na geração.
+
+Quanto mais consistentes as referências e o `identity_prompt`, mais o personagem se
+mantém igual entre as gerações.
+
+---
+
+## 🗂️ Estrutura do projeto
+
+```txt
+HanaNakamura-VTuber-OSS/
+├── main.py                  # supervisiona a stack local inteira
+├── !Hana_Agent_OSS/         # 🧠 backend: Agent Core, API, tools, memória, registries
+│   └── hana_agent_oss/
+│       ├── api/             # rotas FastAPI + serviços (por domínio)
+│       ├── providers/       # seletor de LLM (Gemini / OpenRouter / Groq)
+│       ├── modules/voice/   # STT, TTS, VAD, runtime de voz
+│       ├── memory/          # SQLite + FTS + JSONL
+│       ├── persona/         # perfil, prompts, comportamento
+│       └── tools/           # ferramentas + cliente MCP
+├── control_panel/           # 🎛️ frontend React/Tauri
+│   ├── src/                 # views, components, models, api
+│   └── src-tauri/           # app desktop (Rust)
+├── data/
+│   ├── characters/          # 🎭 referências de personagem
+│   ├── skills/              # skills em markdown
+│   └── memory/              # memória persistente
+├── docs/                    # 📚 documentação pública
+└── tests/                   # testes
+```
+
+> A árvore antiga de backend é **legado**. Novas capacidades entram em
+> `!Hana_Agent_OSS/` como ferramentas, módulos, integrações, subcérebros, plugins ou
+> provedores MCP. O `main.py` é **só supervisor**.
+
+---
+
+## 🧠 Backend — o Agent Core
+
+O backend ativo é `!Hana_Agent_OSS/`. Ele entrega:
 
 - `HanaAgentCore`;
-- structured `AgentRequest`, `AgentResponse` and `AgentEvent`;
-- `ToolCall`, `ToolResult` and `CapabilityManifest`;
-- registries for tools, modules, integrations, subbrains, plugins and MCP
-  providers;
-- FastAPI routes for the Control Panel;
-- WebSockets for chat, status and emotion streams;
-- a lightweight memory system.
-- MCP client support with disabled-by-default servers and per-tool allowlists.
+- `AgentRequest`, `AgentResponse` e `AgentEvent` estruturados;
+- `ToolCall`, `ToolResult` e `CapabilityManifest`;
+- registries para ferramentas, módulos, integrações, subcérebros, plugins e MCP;
+- rotas FastAPI para o Control Panel;
+- WebSockets para chat, status e streams de emoção;
+- um sistema de memória leve;
+- cliente MCP com servidores **desligados por padrão** e allowlist por ferramenta.
 
-The FastAPI surface is split by domain under
-`!Hana_Agent_OSS/hana_agent_oss/api/routers/`, with small services under
-`api/services/`. Root `main.py` remains a supervisor and must not regain route,
-agent, memory or media logic.
+Comandos estruturados usam o Agent Core determinístico. Turnos de chat normais passam
+pelo seletor de provider. Providers LLM ativos: **Gemini API**, **OpenRouter** e
+**Groq**. STT e TTS são providers separados.
 
-Structured commands still use the deterministic Agent Core. Normal chat turns
-run through the provider selector. Active LLM providers are Gemini API
-(`gemini_api`), OpenRouter (`openrouter`) and Groq (`groq`). OpenRouter and
-Groq use dynamic model catalogs and disable Gemini-only LLM features when
-selected; STT and TTS providers remain separate.
+<details>
+<summary>🎙️ <b>Voz, STT e TTS (clique para abrir)</b></summary>
 
-Chat configuration is separate from the Terminal Agente runtime profile:
+<br/>
 
-- `/api/config/llm` controls the main brain tab and the Chat do Controle TTS
-  profile. The CÃ©rebro screen labels that voice block as "TTS do Chat"; it is
-  persisted separately from Terminal Agente voice settings.
-- `/api/config/chat` controls chat provider/model/native-search defaults.
-- OpenRouter models remember preferred internal endpoints separately for
-  Cerebro/voice/Terminal and Chat, with optional privacy and fallback controls.
-- `/api/config/voice` controls Terminal Agente STT/TTS provider, model, voice
-  and microphone settings.
-- `/api/config/conexoes` controls whether STT/TTS/VAD/PTT/hotkeys are globally
-  active and synchronizes the backend voice runtime immediately.
-- `/api/voice/stt/transcribe` exposes the current Groq Whisper STT upload path.
-- `/api/voice/tts/synthesize` exposes the current backend TTS synthesis path.
-  Chat "Gerar voz" and auto-TTS call this endpoint with the persisted Chat TTS
-  provider, model, voice, language, prompt, speed and pitch.
-- `/api/voice/tts/speak` speaks text with the selected TTS provider when TTS is
-  active in Conexoes.
-- `/api/voice/runtime/start`, `/api/voice/runtime/stop`,
-  `/api/voice/runtime/configure`, `/api/voice/runtime/status` and
-  `/api/voice/runtime/interrupt` expose the backend-owned Terminal Agente
-  runtime. Runtime start/configure reads the persisted `/api/config/voice` and
-  `/api/config/conexoes` state; request payloads do not override activation.
-- `/api/terminal-agent/tts/stop` and `/api/voice/tts/stop` expose the current
-  "parar fala" contract.
+Configuração de chat é separada do perfil de runtime do Terminal Agente:
 
-The first active STT provider is `groq_whisper`, using `GROQ_API_KEY` and
-`whisper-large-v3`. When STT is enabled in `Conexoes`, the backend captures the
-selected microphone through `sounddevice`, uses a simple RMS/VAD gate, sends a
-finished utterance to Groq Whisper, routes the transcript to the main LLM
-profile and logs the whole flow in Terminal Agente. The settings panel keeps a
-browser `MediaRecorder` STT test path only for diagnostics. WebM/OGG/MP4 audio
-uploads are still converted to WAV with FFmpeg when available. The no-key TTS
-provider is `edge`, which is spoken locally by the backend through `pygame` when
-TTS is enabled in `Conexoes`. The active cloud TTS providers are
-`gemini_tts`, `google_cloud_tts`, `azure`, `cartesia`, `minimax` and
-`elevenlabs`. `gemini_tts` uses Gemini API speech
-generation for higher acting quality and prompt-based tone control, but it is
-not the low-latency streaming path. `google_cloud_tts` uses a dedicated
-`GOOGLE_CLOUD_TTS_API_KEY` restricted to Cloud Text-to-Speech, supports classic
-speaking-rate/pitch controls and falls back to REST MP3 when streaming
-credentials or a streaming-compatible voice are unavailable. ElevenLabs accepts
-any voice ID from the user's library and exposes Flash/Turbo/Multilingual/v3
-model selection plus stability, similarity, style, speaker boost and speed.
-`ttsVolume` controls local playback volume for the Terminal runtime and Chat
-audio players without changing the provider synthesis request. If VAD is
-disabled, the backend does not transcribe open-room audio; speech input must
-come from PTT or a manual diagnostic test. PTT uses a lighter noise gate than
-open-room VAD so short intentional phrases are accepted, while silence still
-stays out of Groq.
-Stop hotkeys interrupt current TTS and return the runtime to the correct
-listening or standby mode; the Edge streaming player has its own stop signal so
-F8 does not leave the microphone capture loop stalled. The runtime keeps a live
-VAD capture thread alive during F8 and only starts a replacement if that thread
-has already exited. Long Edge TTS responses use the Edge streaming path in the
-voice runtime, so playback can begin while audio is still arriving instead of
-waiting for one large MP3 file to finish generating.
+- `/api/config/llm` — cérebro principal + perfil de TTS do Chat do Controle.
+- `/api/config/chat` — provider/modelo/native-search padrão do chat.
+- `/api/config/voice` — STT/TTS provider, modelo, voz e microfone do Terminal Agente.
+- `/api/config/conexoes` — liga/desliga STT/TTS/VAD/PTT/hotkeys globalmente.
+- `/api/voice/stt/transcribe` — upload STT do Groq Whisper atual.
+- `/api/voice/tts/synthesize` — síntese TTS do backend.
+- `/api/voice/tts/speak` — fala texto com o TTS selecionado.
+- `/api/voice/runtime/{start,stop,configure,status,interrupt}` — runtime de voz.
+- `/api/terminal-agent/tts/stop` e `/api/voice/tts/stop` — contrato "parar fala".
 
-The Control Center chat also has a manual browser microphone button. It records
-with `MediaRecorder`, posts the audio to `/api/voice/stt/transcribe` using the
-saved voice config and fills the chat input with the transcript for review. Chat
-`Gerar voz` creates an audio player attached to the Hana message using
-`/api/voice/tts/synthesize`; optional auto-TTS does the same after every Hana
-response. This chat audio path does not force immediate backend playback, so
-the user can pause, seek, download or change local playback speed per message.
+STT inicial: `groq_whisper` (`GROQ_API_KEY`, `whisper-large-v3`). Captura o microfone
+via `sounddevice`, usa um gate RMS/VAD, manda a fala finalizada pro Groq, roteia o
+transcript pro LLM e loga tudo no Terminal Agente.
 
-## Memory
+TTS sem chave: `edge` (falado localmente via `pygame`). TTS cloud: `gemini_tts`,
+`google_cloud_tts`, `azure`, `cartesia`, `minimax` e `elevenlabs`. Respostas Edge
+longas usam streaming — o playback começa enquanto o áudio ainda chega. `ttsVolume`
+controla o volume local sem mudar a síntese.
 
-The active memory system starts clean.
+Sem VAD, só entra áudio por PTT ou teste manual. PTT usa um gate mais leve, então
+frases curtas passam e o silêncio fica fora do Groq.
 
-- SQLite stores persistent notes, facts and settings.
-- SQLite FTS provides lightweight RAG-style search.
-- JSONL stores recent runtime events.
-- The compact command turns recent events into persistent summaries.
+</details>
 
-Old local memory and previous Chroma-based data are quarantine only. They are
-not read by the new runtime and are not migrated automatically.
+<details>
+<summary>💾 <b>Memória</b></summary>
 
-## MCP
+<br/>
 
-Hana can connect to external MCP servers as a client. Servers are configured in
-`!Hana_Agent_OSS/runtime/mcp_servers.local.json` or through `HANA_MCP_CONFIG`.
-No server is enabled by default and no tool runs until it is allowlisted.
+- 🗄️ **SQLite** — notas, fatos e settings persistentes.
+- 🔍 **SQLite FTS** — busca leve estilo RAG.
+- 📜 **JSONL** — eventos de runtime recentes.
+- 🧹 **compact** — transforma eventos recentes em resumos persistentes.
 
-See [MCP Client](docs/MCP.md).
+</details>
 
-## VTuber Boundary
+<details>
+<summary>🔗 <b>MCP</b></summary>
 
-Hana is a multimodal agent. VTuber mode is optional.
+<br/>
 
-If enabled later, the VTuber layer should be implemented as a subagent or
-interface capability that connects voice, expressions and VTube Studio to the
-same Agent Core.
+A Hana se conecta a servidores MCP externos como **cliente**. Configuração em
+`!Hana_Agent_OSS/runtime/mcp_servers.local.json` ou via `HANA_MCP_CONFIG`.
 
-## Development Checks
+> 🔒 **Nenhum servidor liga por padrão. Nenhuma ferramenta roda sem allowlist.**
 
-Install the base runtime first:
+Veja [docs/MCP.md](docs/MCP.md).
 
-```powershell
-pip install -r requirements.txt
-```
+</details>
 
-Optional providers and media/voice integrations live in
-`requirements-optional.txt` and the Agent OSS `integrations` extra. They are not
-required for the base backend to boot.
+---
+
+## 🛠️ Checks de desenvolvimento
 
 ```powershell
 python -m compileall main.py !Hana_Agent_OSS/src
@@ -201,27 +326,54 @@ cd src-tauri
 cargo check
 ```
 
-## Public Documentation
+---
 
-- [Architecture](docs/ARCHITECTURE.md)
-- [Agent Core](docs/AGENT_CORE.md)
-- [Modules and Capabilities](docs/MODULES.md)
-- [MCP Client](docs/MCP.md)
-- [Installation](docs/INSTALL.md)
-- [Configuration](docs/CONFIG.md)
-- [Providers](docs/PROVIDERS.md)
-- [Troubleshooting](docs/TROUBLESHOOTING.md)
-- [Release Checklist](docs/RELEASE_CHECKLIST.md)
-- [Control Panel](control_panel/README.md)
+## 📚 Documentação
 
-Private planning and status docs live under `docs/private/` and are not public
-usage documentation.
+| 📄 Doc | |
+| --- | --- |
+| [Architecture](docs/ARCHITECTURE.md) | Visão geral do sistema |
+| [Agent Core](docs/AGENT_CORE.md) | O coração |
+| [Modules and Capabilities](docs/MODULES.md) | O que ela sabe fazer |
+| [MCP Client](docs/MCP.md) | Conexão externa |
+| [Installation](docs/INSTALL.md) | Do zero ao boot |
+| [Configuration](docs/CONFIG.md) | Todos os knobs |
+| [Providers](docs/PROVIDERS.md) | LLM / STT / TTS |
+| [Troubleshooting](docs/TROUBLESHOOTING.md) | Quando der ruim |
+| [Release Checklist](docs/RELEASE_CHECKLIST.md) | Antes de publicar |
+| [Control Panel](control_panel/README.md) | O frontend |
 
-## License and Brand
+---
 
-Source code is licensed under **AGPL-3.0-only**. See [LICENSE](LICENSE).
+## ⚖️ Licença e marca
 
-The Hana Operador identity, official brand, official character assets and
-official promotional media are protected separately by project brand policy.
-See [NOTICE](NOTICE), [TRADEMARK.md](TRADEMARK.md) and
+O código-fonte é licenciado sob **AGPL-3.0-only**. Veja [LICENSE](LICENSE).
+
+A identidade **Hana Nakamura**, a marca oficial, os assets do personagem e a mídia
+promocional oficial são protegidos separadamente pela política de marca do projeto.
+Veja [NOTICE](NOTICE), [TRADEMARK.md](TRADEMARK.md) e
 [assets/LICENSE.md](assets/LICENSE.md).
+
+---
+
+<div align="center">
+
+  <h2>⭐ Star History</h2>
+
+  <a href="https://star-history.com/#NakamuraIA/HanaNakamura-VTuber-OSS&Date">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=NakamuraIA/HanaNakamura-VTuber-OSS&type=Date&theme=dark" />
+      <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=NakamuraIA/HanaNakamura-VTuber-OSS&type=Date" />
+      <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=NakamuraIA/HanaNakamura-VTuber-OSS&type=Date" />
+    </picture>
+  </a>
+
+  <br><br>
+
+  <img src="https://count.getloli.com/@Naka_Naka?name=Naka_Naka&theme=gelbooru&padding=7&offset=0&align=top&scale=1&pixelated=1&darkmode=auto" alt="Moe Counter" />
+
+  <br/><br/>
+
+  **🌸 Feita com cuidado, rodando em casa. 🌸**
+
+</div>
