@@ -209,7 +209,7 @@ def _ffmpeg_path() -> str:
                 if custom_path and Path(custom_path).exists():
                     return str(Path(custom_path))
         except Exception:
-            pass
+            logger.debug("Falha ao ler ffmpegPath das settings; tentando env/PATH", exc_info=True)
 
     # 2. Try environment variables
     for env_name in FFMPEG_CANDIDATES:

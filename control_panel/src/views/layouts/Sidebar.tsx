@@ -11,7 +11,7 @@ export function Sidebar({ menus, activeTab, onTabChange }: SidebarProps) {
     <div className="w-[240px] h-full flex flex-col bg-[var(--bg-sidebar)] border-r border-[var(--border-strong)] shrink-0 backdrop-blur-xl relative overflow-hidden z-50 shadow-[5px_0_15px_rgba(0,0,0,0.5)]">
       
       {/* Luz de fundo do Menu */}
-      <div className="absolute top-0 left-0 w-full h-32 bg-gradient-to-b from-[var(--purple-dark)] to-transparent opacity-50 pointer-events-none"></div>
+      <div className="absolute top-0 left-0 w-full h-32 bg-gradient-to-b from-white/5 to-transparent opacity-50 pointer-events-none"></div>
 
       {/* Profile / Header */}
       <div className="flex flex-col items-center pt-[30px] pb-[20px] relative z-10">

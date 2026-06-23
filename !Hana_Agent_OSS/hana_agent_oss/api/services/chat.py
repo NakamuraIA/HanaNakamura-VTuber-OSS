@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 from typing import Any, Awaitable, Callable
 
@@ -21,6 +22,8 @@ from hana_agent_oss.api.services.unified_history import build_memory_context_blo
 
 
 PROVIDER_SELECTOR = ProviderSelector()
+
+logger = logging.getLogger(__name__)
 
 # Safety net: some weaker models occasionally emit a tool call as TEXT instead of
 # doing a real function call (e.g. "<|terminal_run|{...}|>"). That text never runs
@@ -393,7 +396,9 @@ async def run_text_turn(
                 metadata={"full_length": len(text), "channel": channel}
             )
         except Exception:
-            pass
+            # Não quebra o turno se a memória falhar, mas registra o motivo —
+            # senão um texto grande "some" do histórico sem deixar pista.
+            logger.warning("Falha ao salvar texto grande na memória", exc_info=True)
         text = text[:12000] + "\n\n[... texto muito longo truncado para o contexto do modelo. O texto completo foi salvo na memória se precisar lembrar.]"
 
     connections = memory.get_setting("connections_config", dict(DEFAULT_CONNECTIONS))
@@ -463,7 +468,7 @@ async def run_text_turn(
                     }
                 )
             except Exception:
-                pass
+                logger.debug("Falha ao registrar evento de visão pulada", exc_info=True)
     memory.append_event(
         "user",
         text,
@@ -536,6 +541,9 @@ async def run_text_turn(
             if memory_block:
                 chat_messages.insert(0, {"role": "system", "content": memory_block})
         except Exception:
+            # Anti-amnésia: se o bloco de memória falhar, a Hana responde "cega" do
+            # passado dela. Não quebra o turno, mas tem que ficar gravado o motivo.
+            logger.warning("Falha ao montar bloco de memória persistente", exc_info=True)
             injected_memories = []
 
         # === Live context meter (anti-cegueira) ===
@@ -572,6 +580,7 @@ async def run_text_turn(
                 },
             )
         except Exception:
+            logger.debug("Falha ao medir o contexto do turno", exc_info=True)
             context_report = {}
         # Groq "thinker" switch (GUI toggle): honored from the payload first, else the
         # persisted llm_config. Voice/terminal still auto-disable thinking regardless.
@@ -663,7 +672,9 @@ async def run_text_turn(
                     },
                 )
             except Exception:
-                pass  # Never break a turn because memory save failed
+                # Nunca quebra o turno por falha de memória — mas registra, senão um
+                # fato que a Hana decidiu guardar some sem ninguém saber.
+                logger.warning("Falha ao auto-salvar memória de longo prazo", exc_info=True)
 
         # === Living skills: Hana annotates her own skill .md via <anotar_skill> ===
         # Notes are scoped/capped and silently applied; never spoken or shown.

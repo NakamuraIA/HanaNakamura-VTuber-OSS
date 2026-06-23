@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import sqlite3
@@ -17,6 +18,8 @@ from hana_agent_oss.memory.semantic import (
     semantic_memory_status,
 )
 from hana_agent_oss.memory.sqlite import SQLiteStore
+
+logger = logging.getLogger(__name__)
 
 
 from hana_agent_oss.paths import MEMORY_DB as DEFAULT_MEMORY_DB, MEMORY_EVENTS as DEFAULT_EVENTS_PATH
@@ -635,6 +638,9 @@ class MemoryStore(SQLiteStore):
         except sqlite3.OperationalError:
             return {}
         except Exception:
+            # Busca semântica falhou: a Hana cai na busca por texto, mas se isso
+            # acontece sempre a memória "esquece" sem motivo aparente. Registra.
+            logger.warning("Falha na busca semântica de memória", exc_info=True)
             return {}
 
     def embed_pending_memories(self, *, max_items: int = 200, batch_size: int = 32) -> dict[str, Any]:

@@ -58,8 +58,8 @@ export function MainLayout() {
       {/* Main Content com Efeito de Vidro */}
       <div className="flex-1 h-full overflow-hidden relative p-0">
         {/* Luzes de fundo atmosféricas (bem sutis, sem ofuscar). */}
-        <div className="absolute top-[-10%] right-[-5%] w-[500px] h-[500px] bg-[var(--purple-neon)] rounded-full blur-[160px] opacity-[0.05] pointer-events-none"></div>
-        <div className="absolute bottom-[-10%] left-[20%] w-[400px] h-[400px] bg-slate-500 rounded-full blur-[160px] opacity-[0.04] pointer-events-none"></div>
+        <div className="absolute top-[-10%] right-[-5%] w-[500px] h-[500px] bg-slate-500 rounded-full blur-[160px] opacity-[0.03] pointer-events-none"></div>
+        <div className="absolute bottom-[-10%] left-[20%] w-[400px] h-[400px] bg-slate-500 rounded-full blur-[160px] opacity-[0.03] pointer-events-none"></div>
         
         <div className="w-full h-full relative z-10 animate-fade-in">
           

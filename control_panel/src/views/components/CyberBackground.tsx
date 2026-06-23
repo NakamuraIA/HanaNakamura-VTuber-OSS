@@ -32,29 +32,28 @@ export function CyberBackground() {
     window.addEventListener('mousemove', handleMouseMove);
     window.addEventListener('mouseleave', handleMouseLeave);
 
-    // Floating dots (the ones the user wants to keep).
-    for (let i = 0; i < 70; i++) {
+    // Sparse neutral dust keeps depth without returning to a sci-fi particle field.
+    for (let i = 0; i < 42; i++) {
       particles.push({
         x: Math.random() * canvas.width,
         y: Math.random() * canvas.height,
-        size: Math.random() * 2 + 0.5,
-        speedX: (Math.random() - 0.5) * 0.5,
-        speedY: (Math.random() - 0.5) * 0.5 - 0.2, // tends to rise
-        opacity: Math.random() * 0.5 + 0.1,
+        size: Math.random() * 1.3 + 0.35,
+        speedX: (Math.random() - 0.5) * 0.22,
+        speedY: (Math.random() - 0.5) * 0.18 - 0.06,
+        opacity: Math.random() * 0.16 + 0.035,
       });
     }
 
     const MOUSE_RADIUS = 130;
 
     const draw = () => {
-      const computedStyle = getComputedStyle(document.documentElement);
-      const neonColor = computedStyle.getPropertyValue('--purple-neon').trim() || '#a855f7';
+      const dustColor = '#d8dbe0';
 
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-      ctx.shadowBlur = 10;
-      ctx.shadowColor = neonColor;
-      ctx.fillStyle = neonColor;
+      ctx.shadowBlur = 0;
+      ctx.shadowColor = dustColor;
+      ctx.fillStyle = dustColor;
 
       const mouse = mouseRef.current;
 
@@ -75,8 +74,8 @@ export function CyberBackground() {
         }
 
         // Twinkle.
-        p.opacity += (Math.random() - 0.5) * 0.05;
-        p.opacity = Math.max(0.1, Math.min(0.8, p.opacity));
+        p.opacity += (Math.random() - 0.5) * 0.02;
+        p.opacity = Math.max(0.025, Math.min(0.22, p.opacity));
 
         // Wrap around the edges.
         if (p.y < -10) p.y = canvas.height + 10;
@@ -111,20 +110,9 @@ export function CyberBackground() {
 
   return (
     <div className="fixed top-0 left-0 w-full h-full pointer-events-none z-[-1] overflow-hidden bg-[var(--bg-dark)]">
-      {/* Very soft, neutral corner glows — depth without the flashbang. */}
-      <div
-        className="absolute -top-48 -left-48 h-[34rem] w-[34rem] rounded-full opacity-[0.06] blur-[150px]"
-        style={{ background: 'radial-gradient(circle, var(--purple-neon), transparent 70%)' }}
-      />
-      <div
-        className="absolute -bottom-56 -right-48 h-[38rem] w-[38rem] rounded-full opacity-[0.05] blur-[160px]"
-        style={{ background: 'radial-gradient(circle, #64748b, transparent 70%)' }}
-      />
-
+      {/* Fundo chapado (estilo ChatGPT): preto liso, sem brilhos de canto nem
+          vinheta. Só a poeira neutra bem sutil pra não ficar morto. */}
       <canvas ref={canvasRef} className="absolute inset-0" />
-
-      {/* Vignette. */}
-      <div className="absolute inset-0 bg-gradient-radial from-transparent to-[var(--bg-dark)] opacity-80" />
     </div>
   );
 }

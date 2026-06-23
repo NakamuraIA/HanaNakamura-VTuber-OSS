@@ -2,19 +2,19 @@
 @plugin "@tailwindcss/typography";
 
 :root {
-  /* Cores Base e Gradientes Futuristas */
+  /* Base theme: dark neutral surfaces with one restrained action accent. */
   --bg-opacity: 1;
-  --bg-darkest-rgb: 6, 6, 9;
+  --bg-darkest-rgb: 0, 0, 0;
   --bg-darkest: rgba(var(--bg-darkest-rgb), var(--bg-opacity));
-  --bg-sidebar: rgba(10, 10, 15, calc(var(--bg-opacity) * 0.6));
-  /* Neutral slate borders (less purple/blue, calmer base). Accents stay neon. */
+  --bg-dark: rgb(0, 0, 0);
+  --bg-sidebar: rgba(5, 5, 6, calc(var(--bg-opacity) * 0.9));
   --border-strong: rgba(148, 163, 184, 0.14);
   --border-glow: rgba(148, 163, 184, 0.28);
 
   --purple-neon: #c084fc;
   --purple-glow: #a855f7;
   --purple-dark: rgba(100, 116, 139, 0.12);
-  
+
   --cyan-neon: #22d3ee;
   --blue-neon: #3b82f6;
   --red-neon: #ef4444;
@@ -39,9 +39,9 @@
 
   /* Superfícies (camadas de fundo, do mais fundo ao mais alto) */
   --surface-0: rgba(var(--bg-darkest-rgb), 0.0);   /* transparente sobre o fundo */
-  --surface-1: rgba(0, 0, 0, 0.40);                /* card padrão */
-  --surface-2: rgba(255, 255, 255, 0.03);          /* sub-bloco / input */
-  --surface-3: rgba(255, 255, 255, 0.06);          /* hover / destaque */
+  --surface-1: rgba(3, 3, 4, 0.82);                /* card padrão */
+  --surface-2: rgba(255, 255, 255, 0.04);          /* sub-bloco / input */
+  --surface-3: rgba(255, 255, 255, 0.08);          /* hover / destaque */
 
   /* Raio e espaçamento padrão */
   --radius-card: 1rem;       /* 16px - cards */
@@ -49,7 +49,7 @@
   --space-card: 1.5rem;      /* padding interno padrão de card */
 
   /* Elevação */
-  --elev-card: 0 10px 30px rgba(0, 0, 0, 0.35);
+  --elev-card: 0 14px 36px rgba(0, 0, 0, 0.58);
 }
 
 :root {
