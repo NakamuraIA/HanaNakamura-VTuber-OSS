@@ -144,6 +144,26 @@ def normalize_ghost_text(text: str) -> str:
     return normalized.strip()
 
 
+def is_prompt_echo(text: str, prompt: str, *, min_words: int = 4, overlap_ratio: float = 0.6) -> bool:
+    """Detect Whisper hallucinating our own STT bias prompt back as "speech".
+
+    Without real audio (silence/noise), Whisper sometimes regurgitates the
+    ``initial_prompt`` we send it (built by ``build_stt_prompt``) instead of
+    returning empty text. The fixed ghost-phrase list can't catch this because
+    the bias prompt varies (user/assistant names, speech_terms). Instead, we
+    check word overlap between the transcription and the prompt we actually
+    sent: high overlap on a short transcript means "echo", not speech.
+    """
+    prompt_words = set(normalize_ghost_text(prompt).split())
+    if not prompt_words:
+        return False
+    text_words = normalize_ghost_text(text).split()
+    if len(text_words) < min_words:
+        return False
+    matched = sum(1 for word in text_words if word in prompt_words)
+    return (matched / len(text_words)) >= overlap_ratio
+
+
 def is_ghost_stt_phrase(text: str) -> bool:
     normalized = normalize_ghost_text(text)
     if normalized in GHOST_STT_PHRASES:
@@ -360,7 +380,7 @@ class GroqWhisperSTTProvider:
             temperature=0.0,
         )
         raw_text = _extract_transcription_text(transcription)
-        filtered = self._should_filter(raw_text)
+        filtered = self._should_filter(raw_text, prompt=selected_prompt)
         text = "" if filtered else apply_stt_corrections(raw_text, self.corrections)
         if filtered and raw_text:
             logger.info("[STT] Filtered ghost transcription: %s", raw_text)
@@ -375,11 +395,13 @@ class GroqWhisperSTTProvider:
         )
 
     @staticmethod
-    def _should_filter(text: str) -> bool:
+    def _should_filter(text: str, *, prompt: str = "") -> bool:
         normalized = normalize_ghost_text(text)
         if is_ghost_stt_phrase(text):
             return True
-        return len(normalized) < 3 and normalized not in VALID_SHORT_UTTERANCES
+        if len(normalized) < 3 and normalized not in VALID_SHORT_UTTERANCES:
+            return True
+        return is_prompt_echo(text, prompt)
 
 
 MotorSTTWhisper = GroqWhisperSTTProvider

@@ -11,6 +11,7 @@ from hana_agent_oss.core.protocol import AgentRequest, AgentResponse
 from hana_agent_oss.core.runtime import HanaAgentCore
 from hana_agent_oss.memory.store import MemoryStore
 from hana_agent_oss.modules.attachments import AttachmentStore
+from hana_agent_oss.modules.attachments.extract import split_document_attachments
 from hana_agent_oss.modules.vision.image_service import ImageGenerationService
 from hana_agent_oss.modules.vision.image_xml import extract_image_xml_actions, strip_image_xml_tags
 from hana_agent_oss.memory.memory_xml import extract_memory_saves, strip_memory_xml_tags
@@ -382,6 +383,12 @@ async def run_text_turn(
     channel = str(payload.get("channel") or "control_center")
     call_mode = bool(payload.get("call_mode", False))
     resolved_attachments = resolve_chat_attachments(payload, memory=memory, text=text, channel=channel)
+
+    # Anexos de DOCUMENTO (PDF/texto) viram texto no prompt e saem da lista de
+    # anexos (o provider só entende imagem). Ponto único: vale chat, Discord e voz.
+    document_context, resolved_attachments = split_document_attachments(resolved_attachments)
+    if document_context:
+        text = f"{text}\n\n--- Conteúdo dos anexos ---\n{document_context}"
 
     # Truncate very large text (e.g. user sending long articles/news to "read"/process directly,
     # without summary or vision). Prevents context bloat, token errors, or models generating

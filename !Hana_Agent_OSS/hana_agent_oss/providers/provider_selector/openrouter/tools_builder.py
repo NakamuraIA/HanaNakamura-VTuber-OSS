@@ -368,7 +368,8 @@ def build_tool_schemas_and_runners(
             "name": "reminder_create",
             "description": (
                 "Cria um lembrete/alarme. Informe 'at' (HH:MM), 'in_minutes' ou 'in_seconds'. "
-                "repeat='daily' repete todo dia. A Hana avisa por voz (se TTS ligado) e no painel quando chegar a hora."
+                "repeat='daily' repete todo dia. discord=true também avisa no Discord (DM mencionando a dona). "
+                "A Hana avisa por voz (se TTS ligado) e no painel quando chegar a hora."
             ),
             "parameters": {
                 "type": "object",
@@ -380,6 +381,7 @@ def build_tool_schemas_and_runners(
                     "in_seconds": {"type": "number"},
                     "date": {"type": "string", "description": "Data opcional YYYY-MM-DD"},
                     "repeat": {"type": "string", "enum": ["none", "daily"]},
+                    "discord": {"type": "boolean", "description": "Se true, também avisa no Discord quando disparar."},
                 },
             },
         },

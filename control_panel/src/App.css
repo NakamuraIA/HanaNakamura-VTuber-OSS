@@ -6,7 +6,7 @@
   --bg-opacity: 1;
   --bg-darkest-rgb: 0, 0, 0;
   --bg-darkest: rgba(var(--bg-darkest-rgb), var(--bg-opacity));
-  --bg-dark: rgb(0, 0, 0);
+  --bg-dark: rgb(3, 3, 4);
   --bg-sidebar: rgba(5, 5, 6, calc(var(--bg-opacity) * 0.9));
   --border-strong: rgba(148, 163, 184, 0.14);
   --border-glow: rgba(148, 163, 184, 0.28);

@@ -118,9 +118,9 @@ async def discord_bot_status(request: Request) -> dict[str, Any]:
 async def discord_outbox(request: Request) -> dict[str, Any]:
     """Pending DMs Hana queued for Operador; the Discord bot polls this."""
     from hana_agent_oss.tools.discord_tools import pending_outbox
+    from hana_agent_oss.discord_bot.owner import primary_owner_id
 
-    owner_id = str(__import__("os").environ.get("HANA_OWNER_ID") or "0").strip()
-    return {"ok": True, "ownerId": owner_id, "pending": pending_outbox(request.app.state.memory)}
+    return {"ok": True, "ownerId": primary_owner_id(), "pending": pending_outbox(request.app.state.memory)}
 
 
 @router.post("/outbox/delivered")

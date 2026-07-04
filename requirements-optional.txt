@@ -25,3 +25,6 @@ tavily-python==0.7.23
 # Optional local semantic memory. Keep disabled unless HANA_MEMORY_SEMANTIC=1.
 fastembed>=0.8,<0.9
 sqlite-vec>=0.1.9,<0.2
+
+# Leitura de anexos de documento (PDF) no chat/Discord. Texto puro não precisa.
+pypdf>=4,<6

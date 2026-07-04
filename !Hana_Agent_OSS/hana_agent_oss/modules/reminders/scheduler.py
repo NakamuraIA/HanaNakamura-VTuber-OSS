@@ -112,7 +112,7 @@ class ReminderScheduler:
         self.memory.set_setting(REMINDERS_SETTING, reminders)
 
     # --- public API ------------------------------------------------------ #
-    def create(self, *, text: str, at: str = "", in_minutes: Any = None, in_seconds: Any = None, date: str = "", repeat: str = "none") -> dict[str, Any]:
+    def create(self, *, text: str, at: str = "", in_minutes: Any = None, in_seconds: Any = None, date: str = "", repeat: str = "none", discord: bool = False) -> dict[str, Any]:
         clean_text = str(text or "").strip()
         if not clean_text:
             return {"ok": False, "error": "reminder_text_empty"}
@@ -127,6 +127,7 @@ class ReminderScheduler:
             "text": clean_text[:500],
             "due_at": due_iso,
             "repeat": repeat_norm,
+            "discord": bool(discord),
             "status": "active",
             "created_at": _iso(_now()),
         }
@@ -200,6 +201,21 @@ class ReminderScheduler:
         notice = f"Lembrete: {text}"
         self._log_notification(reminder, notice)
         self._speak(notice)
+        if reminder.get("discord"):
+            self._notify_discord(notice)
+
+    def _notify_discord(self, notice: str) -> None:
+        """Enfileira o aviso no outbox do Discord (o bot entrega mencionando a dona).
+
+        Só dispara se o lembrete pediu Discord. Nunca quebra o disparo: falha aqui
+        não pode impedir o aviso no PC.
+        """
+        try:
+            from hana_agent_oss.tools.discord_tools import discord_notify
+
+            discord_notify(self.memory, notice)
+        except Exception:
+            pass
 
     def _log_notification(self, reminder: dict[str, Any], notice: str) -> None:
         # Panel-visible record + Terminal Agent event.

@@ -29,6 +29,7 @@ def reminder_create(args: dict[str, Any]) -> ToolResult:
         in_seconds=args.get("in_seconds"),
         date=str(args.get("date") or ""),
         repeat=str(args.get("repeat") or "none"),
+        discord=bool(args.get("discord")),
     )
     return ToolResult(ok=bool(result.get("ok")), tool="reminder.create", output=result, error=None if result.get("ok") else str(result.get("error")))
 
@@ -64,6 +65,7 @@ def register_reminder_tools(registry: ToolRegistry) -> None:
                 "in_seconds": {"type": "number"},
                 "date": {"type": "string", "description": "Data opcional YYYY-MM-DD"},
                 "repeat": {"type": "string", "enum": ["none", "daily"]},
+                "discord": {"type": "boolean", "description": "Se true, tambem avisa no Discord (DM mencionando a dona) quando disparar."},
             },
         },
         {"type": "object"},

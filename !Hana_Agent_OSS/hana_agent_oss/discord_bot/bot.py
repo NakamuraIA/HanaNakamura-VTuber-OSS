@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 
 import discord
 from discord import app_commands
@@ -51,7 +52,7 @@ class HanaBot(commands.Bot):
 
     async def setup_hook(self) -> None:
         """Carrega cogs e sincroniza os slash commands globalmente (user-install)."""
-        for cog in ("geral", "hana"):
+        for cog in ("geral", "hana", "voz"):
             try:
                 await self.load_extension(f"hana_agent_oss.discord_bot.cogs.{cog}")
                 logger.info("Cog '%s' carregado.", cog)
@@ -59,9 +60,19 @@ class HanaBot(commands.Bot):
                 logger.exception("Falha ao carregar cog '%s'.", cog)
         if not self._outbox_poller.is_running():
             self._outbox_poller.start()
+        # Sync dos slash. Global pode levar ~1h pra propagar. Se HANA_DEV_GUILD_ID
+        # estiver setado, copia os comandos pra esse servidor e sincroniza lá também,
+        # onde aparecem NA HORA — ideal pra testar comando novo sem esperar.
         try:
-            synced = await self.tree.sync()
-            logger.info("Slash commands sincronizados: %s", [c.name for c in synced])
+            dev_guild_id = str(os.environ.get("HANA_DEV_GUILD_ID") or "").strip()
+            if dev_guild_id.isdigit():
+                guild = discord.Object(id=int(dev_guild_id))
+                self.tree.copy_global_to(guild=guild)
+                synced = await self.tree.sync(guild=guild)
+                logger.info("Slash sincronizados NA HORA no servidor de dev %s: %s", dev_guild_id, [c.name for c in synced])
+            else:
+                synced = await self.tree.sync()
+                logger.info("Slash commands sincronizados (global, pode levar ~1h): %s", [c.name for c in synced])
         except Exception:
             logger.exception("Falha ao sincronizar slash commands.")
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import os
 from typing import Any
 
@@ -46,6 +47,22 @@ class HanaBackendClient:
             response = await client.get(url)
             response.raise_for_status()
             return response.content
+
+    async def synthesize_speech(self, text: str) -> bytes | None:
+        """Pede o áudio TTS da resposta da Hana (usa o perfil de TTS do Chat persistido).
+
+        Devolve os bytes do áudio (mp3/wav) ou None se vier vazio. Usado pela voz do
+        Discord pra tocar a fala dela na call.
+        """
+        clean = str(text or "").strip()
+        if not clean:
+            return None
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            response = await client.post(f"{self.backend_url}/api/voice/tts/synthesize", json={"text": clean})
+            response.raise_for_status()
+            data = response.json()
+        b64 = data.get("audioBase64")
+        return base64.b64decode(b64) if b64 else None
 
     async def get_discord_outbox(self) -> dict[str, Any]:
         """Fetch pending DMs Hana queued for the owner (ownerId + pending list)."""

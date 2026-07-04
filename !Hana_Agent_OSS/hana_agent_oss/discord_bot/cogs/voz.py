@@ -273,6 +273,28 @@ class Voz(commands.Cog):
             if isinstance(audio, dict) and audio.get("audioBase64") and ctx.voice_client:
                 await self._play_audio(ctx.voice_client, audio)
 
+    async def speak(self, guild: discord.Guild | None, text: str) -> None:
+        """Fala um texto avulso na call ativa do servidor (usado pelo cog Hana).
+
+        Bridge simples pra outros cogs (ex.: resposta do slash /hana) tocarem TTS
+        na call sem precisar conhecer os detalhes de conexão/streaming daqui. Não
+        interfere na fila de segmentos de voz recebidos (process_voice_segment).
+        """
+        if guild is None or not guild.voice_client:
+            return
+        clean = str(text or "").strip()
+        if not clean:
+            return
+        try:
+            audio = await self.backend.synthesize_speech(clean)
+        except Exception:
+            logger.exception("Falha ao gerar TTS avulso pra call")
+            return
+        if not audio:
+            return
+        mime = "audio/mpeg"
+        await self._play_audio(guild.voice_client, {"audioBase64": base64.b64encode(audio).decode("ascii"), "mimeType": mime})
+
     async def _play_audio(self, voice_client: discord.VoiceClient, audio: dict[str, Any]) -> None:
         """Decode backend TTS bytes and play them in the Discord voice channel."""
         suffix = ".mp3"

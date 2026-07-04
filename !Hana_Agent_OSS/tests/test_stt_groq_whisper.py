@@ -10,6 +10,7 @@ from hana_agent_oss.modules.voice.stt_whisper import (
     GroqWhisperSTTProvider,
     STTTranscriptionResult,
     is_ghost_stt_phrase,
+    is_prompt_echo,
     normalize_stt_prompt,
     normalize_stt_language,
 )
@@ -62,6 +63,28 @@ def test_groq_whisper_filters_ghost_phrases_and_too_short_noise() -> None:
     noise_client = _FakeGroqClient("a")
     noise_provider = GroqWhisperSTTProvider(api_key="test", client=noise_client)
     assert noise_provider.transcribe_bytes(b"0" * 1024).filtered is True
+
+
+def test_groq_whisper_filters_hallucinated_prompt_echo() -> None:
+    """Whisper sometimes echoes our own STT bias prompt back instead of silence."""
+    from hana_agent_oss.persona import build_stt_prompt
+
+    prompt = build_stt_prompt()
+    echo = "O usuario se chama Operador e fala com a assistente Hana. Use grafia correta para nomes e termos comuns."
+    assert is_prompt_echo(echo, prompt) is True
+
+    echo_client = _FakeGroqClient(echo)
+    echo_provider = GroqWhisperSTTProvider(api_key="test", client=echo_client)
+    result = echo_provider.transcribe_bytes(b"0" * 1024)
+    assert result.filtered is True
+    assert result.text == ""
+
+    # Fala real nao deve ser filtrada so por citar nomes do prompt.
+    real_client = _FakeGroqClient("Operador perguntou pra Hana se ela ja comeu hoje")
+    real_provider = GroqWhisperSTTProvider(api_key="test", client=real_client)
+    real_result = real_provider.transcribe_bytes(b"0" * 1024)
+    assert real_result.filtered is False
+    assert real_result.text == "Operador perguntou pra Hana se ela ja comeu hoje"
 
 
 def test_groq_whisper_filters_too_small_audio_before_api_call() -> None:

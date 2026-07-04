@@ -9,7 +9,6 @@ import {
   Eye,
   Loader2,
   Mic,
-  Radio,
   RefreshCw,
   Send,
   Settings,
@@ -597,15 +596,23 @@ export function TabTerminalAgent({ isActive }: TabTerminalAgentProps) {
     // todas as bolhas a cada 2s, que era o que deixava a aba pesada).
     const signature = `${nextEvents.length}:${nextEvents[nextEvents.length - 1]?.id || ""}`;
     if (loadedEventsRef.current && signature === eventsSignatureRef.current) return;
+
+    // Carga inicial (1º load, reload da página ou volta pra aba) NUNCA anima: a
+    // resposta já é histórica. Só anima quando um assistant_text NOVO chega num
+    // poll posterior, em tempo real. Snapshot dos ids ANTES de atualizar evita a
+    // corrida que fazia a animação "re-tocar" sozinha no reload.
+    const isInitialLoad = !loadedEventsRef.current;
+    const previousIds = eventIdsRef.current;
     eventsSignatureRef.current = signature;
-    if (loadedEventsRef.current) {
-      const newestAssistant = [...nextEvents]
-        .reverse()
-        .find((event) => event.kind === "assistant_text" && !eventIdsRef.current.has(event.id));
-      if (newestAssistant) setStreamingEventId(newestAssistant.id);
-    }
     eventIdsRef.current = new Set(nextEvents.map((event) => event.id));
     loadedEventsRef.current = true;
+
+    if (!isInitialLoad) {
+      const newestAssistant = [...nextEvents]
+        .reverse()
+        .find((event) => event.kind === "assistant_text" && !previousIds.has(event.id));
+      if (newestAssistant) setStreamingEventId(newestAssistant.id);
+    }
     setEvents(nextEvents);
   };
 
@@ -1142,57 +1149,39 @@ export function TabTerminalAgent({ isActive }: TabTerminalAgentProps) {
 
   return (
     <div className="w-full h-full overflow-hidden bg-[#050608] shadow-2xl relative flex flex-col">
-      <div className="border-b border-zinc-800 bg-[#090b0f] px-4 py-3">
-        <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+      {/* Cabeçalho + status FLUTUANTES: não reservam espaço, ficam por cima das
+          mensagens (que ocupam a tela toda). pointer-events-none deixa o scroll
+          passar por baixo; só os botões capturam clique. */}
+      <div className="pointer-events-none absolute inset-x-0 top-0 z-30 px-4 pt-3">
+        <div className="flex flex-col gap-2 xl:flex-row xl:items-center xl:justify-between">
           <div className="min-w-0">
             <h2 className="flex items-center gap-2 font-mono text-lg font-black uppercase tracking-widest text-zinc-100">
               <SquareTerminal size={20} className="text-slate-300" /> Terminal Agente
             </h2>
-            <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 font-mono text-[11px] text-zinc-400">
-              <span>stt={activeSttProvider?.label || voiceConfig.sttProvider}</span>
-              <span>tts={activeTtsProvider?.label || voiceConfig.ttsProvider}{voiceConfig.ttsEnabled ? "" : " off"}</span>
-              <span>model={voiceConfig.sttModel || "default"}</span>
-              <span>voice={voiceConfig.ttsVoice || "default"}</span>
-
-              <span>backend={backendState}</span>
-              <span>runtime={runtimeStatus?.state || "idle"}</span>
-            </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
-            <button onClick={loadEvents} className="inline-flex h-9 items-center gap-2 rounded-md border border-zinc-700 bg-zinc-900 px-3 font-mono text-[11px] font-bold uppercase tracking-widest text-zinc-200 hover:border-cyan-400/60">
+          <div className="pointer-events-auto flex flex-wrap items-center gap-2">
+            <button onClick={loadEvents} className="inline-flex h-9 items-center gap-2 rounded-full bg-zinc-800/70 px-4 font-mono text-[11px] font-bold uppercase tracking-widest text-zinc-200 hover:bg-zinc-700/70">
               <RefreshCw size={14} /> Atualizar
             </button>
-            <button onClick={stopTts} className="inline-flex h-9 items-center gap-2 rounded-md border border-pink-400/40 bg-pink-950/40 px-3 font-mono text-[11px] font-bold uppercase tracking-widest text-pink-100 hover:bg-pink-900/50">
+            <button onClick={stopTts} className="inline-flex h-9 items-center gap-2 rounded-full bg-pink-950/60 px-4 font-mono text-[11px] font-bold uppercase tracking-widest text-pink-100 hover:bg-pink-900/60">
               <Volume2 size={14} /> Parar fala
             </button>
-            <button onClick={() => setSettingsOpen(true)} className="inline-flex h-9 items-center gap-2 rounded-md border border-zinc-700 bg-zinc-900 px-3 font-mono text-[11px] font-bold uppercase tracking-widest text-zinc-200 hover:border-violet-400/60">
+            <button onClick={() => setSettingsOpen(true)} className="inline-flex h-9 items-center gap-2 rounded-full bg-zinc-800/70 px-4 font-mono text-[11px] font-bold uppercase tracking-widest text-zinc-200 hover:bg-zinc-700/70">
               <Settings size={14} /> Config
             </button>
           </div>
         </div>
-      </div>
 
-      <div className="border-b border-zinc-800 bg-[#07090c] px-4 py-2">
-        <div className="flex flex-wrap items-center gap-3 font-mono text-[11px] text-zinc-400">
-          <span className="inline-flex items-center gap-2 text-emerald-300"><Radio size={12} /> {visibleEvents.length}/{MAX_VISIBLE_EVENTS}</span>
-          <span className={runtimeStatus?.state === "error" ? "text-red-300" : runtimeStatus?.running ? "text-emerald-300" : "text-zinc-500"}>
-            state={runtimeStatus?.state || "idle"}
-          </span>
-          <span className={backendState === "online" ? "text-emerald-300" : backendState === "offline" ? "text-red-300" : "text-amber-300"}>
-            backend={backendState}
-          </span>
-          <span className={connections?.stt ? "text-emerald-300" : "text-zinc-500"}>stt={connections?.stt ? "backend" : "off"}</span>
-          <span className={connections?.tts ? "text-pink-300" : "text-zinc-500"}>tts={connections?.tts ? "on" : "off"}</span>
-
-          {runtimeStatus?.error && <span className="text-red-300">error={runtimeStatus.error}</span>}
-          <span>emotion={metadataText(visibleEvents[visibleEvents.length - 1] || ({} as TerminalAgentEvent), "emotion") || "n/a"}</span>
-          <span>vision={metadataText(visibleEvents[visibleEvents.length - 1] || ({} as TerminalAgentEvent), "vision") || "n/a"}</span>
-          {status && <span className="text-cyan-300">{status}</span>}
-          <button onClick={copyVisibleLog} className="ml-auto inline-flex items-center gap-1 text-zinc-300 hover:text-white">
+        <div className="mt-2 flex flex-wrap items-center justify-end gap-1.5 font-mono text-[10px] text-zinc-400 opacity-80">
+          {backendState === "offline" && <span className="rounded-full bg-red-950/60 px-2.5 py-1 text-red-300">offline</span>}
+          {status && <span className="rounded-full bg-zinc-800/60 px-2.5 py-1 text-cyan-300">{status}</span>}
+          <span className={`rounded-full bg-zinc-800/60 px-2.5 py-1 ${connections?.tts ? "text-pink-300" : "text-zinc-500"}`}>tts={connections?.tts ? "on" : "off"}</span>
+          <span className={`rounded-full bg-zinc-800/60 px-2.5 py-1 ${connections?.visao ? "text-emerald-300" : "text-zinc-500"}`}>vision={connections?.visao ? "on" : "off"}</span>
+          <button onClick={copyVisibleLog} className="pointer-events-auto inline-flex items-center gap-1 rounded-full bg-zinc-800/60 px-2.5 py-1 text-zinc-300 hover:text-white">
             <Copy size={13} /> copiar log
           </button>
-          <button onClick={clearEvents} className="inline-flex items-center gap-1 text-red-300 hover:text-red-100">
+          <button onClick={clearEvents} className="pointer-events-auto inline-flex items-center gap-1 rounded-full bg-zinc-800/60 px-2.5 py-1 text-red-300 hover:text-red-100">
             <Trash2 size={13} /> limpar
           </button>
         </div>
@@ -1206,9 +1195,9 @@ export function TabTerminalAgent({ isActive }: TabTerminalAgentProps) {
         onPointerDown={() => { manualScrollRef.current = true; }}
         onPointerUp={() => { manualScrollRef.current = false; }}
         onPointerCancel={() => { manualScrollRef.current = false; }}
-        className="h-full overflow-y-auto custom-scrollbar bg-[radial-gradient(circle_at_top,rgba(34,211,238,0.06),transparent_35%),#050608] p-4 font-mono text-[12px]"
+        className="h-full overflow-y-auto custom-scrollbar bg-[#050608] p-4 font-mono text-[12px]"
       >
-        <div ref={contentRef}>
+        <div ref={contentRef} className="mx-auto w-full max-w-5xl pt-16">
         {visibleEvents.length === 0 ? (
           <div className="flex h-full min-h-[320px] items-center justify-center text-zinc-500">
             <span className="border border-dashed border-zinc-700 px-4 py-2">terminal pronto: aguardando voz, tool calls e respostas</span>
@@ -1238,34 +1227,32 @@ export function TabTerminalAgent({ isActive }: TabTerminalAgentProps) {
       )}
       </div>
 
-      <div className="border-t border-zinc-800 bg-[#090b0f] p-3">
-        <div className="grid grid-cols-1 gap-3 xl:grid-cols-[1fr_360px_auto]">
+      <div className="p-3">
+        <div className="relative mx-auto w-full max-w-3xl">
           <textarea
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) appendCommand();
             }}
-            className="h-[76px] resize-none rounded-md border border-zinc-700 bg-[#050608] px-3 py-2 font-mono text-sm text-zinc-100 outline-none placeholder:text-zinc-600 focus:border-cyan-400/70"
-            placeholder="nakamura> comando manual..."
+            className="h-[76px] w-full resize-none rounded-2xl border border-zinc-700 bg-[#050608] py-3 pl-4 pr-14 font-mono text-sm text-zinc-100 outline-none placeholder:text-zinc-600 focus:border-cyan-400/70"
+            placeholder="operador> comando manual..."
           />
-          <div className="h-[76px] overflow-hidden rounded-md border border-zinc-800 bg-[#050608] px-3 py-2 font-mono text-[11px] text-zinc-400">
-            <div className="mb-1 text-pink-200">tts_preview&gt;</div>
-            <div className="break-words leading-relaxed">{sanitizedPreview || "texto limpo para fala aparece aqui"}</div>
-          </div>
           <button
             onClick={appendCommand}
             disabled={!draft.trim()}
-            className="h-[76px] rounded-md border border-cyan-400/40 bg-cyan-950/50 px-6 font-mono text-[11px] font-black uppercase tracking-widest text-cyan-100 hover:bg-cyan-900/60 disabled:opacity-40"
+            title="Enviar"
+            aria-label="Enviar"
+            className="absolute bottom-3 right-3 flex h-10 w-10 items-center justify-center rounded-xl text-cyan-200 hover:bg-cyan-900/30 disabled:opacity-30"
           >
-            <span className="flex items-center justify-center gap-2"><Send size={15} /> Enviar</span>
+            <Send size={18} />
           </button>
         </div>
       </div>
 
       {settingsOpen && (
-        <div className="absolute inset-0 z-50 bg-black/60">
-          <div className="absolute inset-y-4 left-4 right-4 flex flex-col overflow-hidden rounded-lg border border-zinc-700 bg-[#080a0e] shadow-2xl md:left-auto md:w-full md:max-w-xl">
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="flex h-full max-h-[85vh] w-full max-w-5xl flex-col overflow-hidden rounded-lg border border-zinc-700 bg-[#080a0e] shadow-2xl">
             <div className="flex items-center justify-between border-b border-zinc-800 px-4 py-3">
               <h3 className="font-mono text-sm font-black uppercase tracking-widest text-zinc-100">Configuracao do Terminal</h3>
               <button onClick={() => setSettingsOpen(false)} className="text-zinc-500 hover:text-white" title="Fechar">

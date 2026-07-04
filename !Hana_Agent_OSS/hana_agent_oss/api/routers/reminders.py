@@ -35,6 +35,7 @@ async def create_reminder(request: Request, payload: dict[str, Any]) -> dict[str
         in_seconds=payload.get("in_seconds"),
         date=str(payload.get("date") or ""),
         repeat=str(payload.get("repeat") or "none"),
+        discord=bool(payload.get("discord")),
     )
 
 

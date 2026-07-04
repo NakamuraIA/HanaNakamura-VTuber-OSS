@@ -229,6 +229,17 @@ function modelPriceScore(model: ModelSpec) {
   return values.length ? values.reduce((total, value) => total + value, 0) : null;
 }
 
+function pricePerMillion(value: unknown): string {
+  /** Catalogo reporta preco POR TOKEN; humanos leem preco por 1M tokens. */
+  const n = Number(value);
+  if (!Number.isFinite(n)) return "?";
+  const perM = n * 1_000_000;
+  if (perM === 0) return "$0";
+  if (perM >= 100) return `$${perM.toFixed(0)}`;
+  if (perM < 0.01) return "<$0.01"; // evita mostrar "$0.00" pra modelo pago
+  return `$${perM.toFixed(2)}`;
+}
+
 function chatModelOption(model: ModelSpec): CatalogPickerOption {
   /** Expose Chat models through the same searchable and favorite-aware catalog as Cerebro. */
   const badges: CatalogPickerOption["badges"] = [];
@@ -248,7 +259,7 @@ function chatModelOption(model: ModelSpec): CatalogPickerOption {
     priceLabel: model.free
       ? "free"
       : model.pricing?.prompt || model.pricing?.completion
-        ? `in ${model.pricing?.prompt || "?"} / out ${model.pricing?.completion || "?"}`
+        ? `in ${pricePerMillion(model.pricing?.prompt)} / out ${pricePerMillion(model.pricing?.completion)} /M`
         : "",
     contextTokens: model.maxInputTokens,
     capabilityScore: [
@@ -1298,8 +1309,9 @@ export function TabChat({ isActive }: TabChatProps) {
         </div>
       )}
       
-      {/* HEADER / TOOLBAR */}
-      <div className="bg-[rgba(10,10,15,0.85)] border-b border-[var(--border-strong)] p-3 z-10 shadow-lg backdrop-blur-md">
+      {/* HEADER / TOOLBAR: flutua sobre o chat (vidro fosco), sem reservar espaco,
+          assim o texto passa por baixo dela e borra em vez de cortar seco. */}
+      <div className="pointer-events-none absolute inset-x-0 top-0 z-20 bg-[rgba(0,0,0,0.55)] p-3 backdrop-blur-md">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
           <div className="flex items-center gap-3">
             <div className="w-9 h-9 rounded-full bg-[var(--purple-dark)] flex items-center justify-center border border-[var(--purple-neon)] shadow-[0_0_15px_var(--purple-dark)]">
@@ -1314,8 +1326,8 @@ export function TabChat({ isActive }: TabChatProps) {
               </p>
             </div>
           </div>
-          
-          <div className="flex flex-wrap items-center justify-end gap-2">
+
+          <div className="pointer-events-auto flex flex-wrap items-center justify-end gap-2">
             <button
               type="button"
               onClick={() => setChatControlsOpen((value) => !value)}
@@ -1357,8 +1369,21 @@ export function TabChat({ isActive }: TabChatProps) {
           </div>
         </div>
 
-        {chatControlsOpen && (
-          <div className="mt-2 max-h-[34vh] space-y-2 overflow-y-auto rounded-xl border border-white/10 bg-black/40 p-2.5 backdrop-blur-sm">
+      </div>
+
+      {chatControlsOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => setChatControlsOpen(false)}>
+          <div
+            className="flex max-h-[85vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-white/10 bg-[#141419]/70 shadow-2xl backdrop-blur-sm"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
+              <h3 className="text-sm font-black uppercase tracking-widest text-[var(--text-primary)]">Configuracoes do Chat</h3>
+              <button onClick={() => setChatControlsOpen(false)} className="text-[var(--text-muted)] hover:text-white" title="Fechar">
+                <X size={18} />
+              </button>
+            </div>
+            <div className="space-y-2 overflow-y-auto p-4">
             {/* SECAO: MOTOR (provider + modelo) */}
             <div className="flex flex-col gap-2">
               <div className="flex flex-wrap items-center gap-2">
@@ -1492,9 +1517,10 @@ export function TabChat({ isActive }: TabChatProps) {
                 <Button onClick={() => deleteChatSession(activeSessionId)} variant="danger" size="sm">Apagar</Button>
               </div>
             </div>
+            </div>
           </div>
-        )}
-      </div>
+        </div>
+      )}
 
       {/* CHAT AREA */}
       <div className="relative min-h-0 flex-1">
@@ -1507,11 +1533,7 @@ export function TabChat({ isActive }: TabChatProps) {
           onPointerCancel={() => { manualScrollRef.current = false; }}
           className="relative h-full overflow-y-auto p-6 custom-scrollbar"
         >
-        <div ref={contentRef} className="space-y-8">
-        {/* Marca d'Ã¡gua */}
-        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 opacity-[0.03] pointer-events-none select-none">
-          <img src="/hana_foto_01.png" alt="" className="w-[500px] grayscale" />
-        </div>
+        <div ref={contentRef} className="mx-auto max-w-6xl space-y-8 pt-24">
 
         {hiddenMessages > 0 && (
           <div className="flex justify-center">

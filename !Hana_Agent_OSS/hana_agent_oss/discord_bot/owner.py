@@ -23,3 +23,18 @@ def owner_ids() -> set[str]:
 def is_owner(user_id: object) -> bool:
     """True somente para a dona do bot. Qualquer outro é bloqueado."""
     return str(user_id or "") in owner_ids()
+
+
+def primary_owner_id() -> str:
+    """Dono principal para DMs proativas (outbox).
+
+    Precedência: HANA_OWNER_ID > HANA_OWNER_IDS (primeiro) > default. É a fonte
+    única reusada pelo backend, para o ID não ficar fixo/duplicado no router.
+    """
+    single = _split_ids(os.environ.get("HANA_OWNER_ID"))
+    if single:
+        return single[0]
+    multi = _split_ids(os.environ.get("HANA_OWNER_IDS"))
+    if multi:
+        return multi[0]
+    return DEFAULT_OWNER_ID
