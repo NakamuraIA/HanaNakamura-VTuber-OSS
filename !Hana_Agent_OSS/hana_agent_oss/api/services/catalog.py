@@ -4,6 +4,7 @@ import os
 from typing import Any
 
 from hana_agent_oss.memory.store import MemoryStore
+from hana_agent_oss.modules.voice.tts_fishaudio import FISHAUDIO_TTS_MODELS, DEFAULT_FISHAUDIO_MODEL
 from hana_agent_oss.modules.voice.tts_elevenlabs import (
     DEFAULT_ELEVENLABS_MODEL,
     DEFAULT_ELEVENLABS_VOICE,
@@ -12,6 +13,8 @@ from hana_agent_oss.modules.voice.tts_elevenlabs import (
 from hana_agent_oss.providers.provider_selector.deepseek.catalog import get_deepseek_catalog
 from hana_agent_oss.providers.provider_selector.groq.catalog import GROQ_STATIC_MODELS, get_groq_catalog
 from hana_agent_oss.providers.provider_selector.openrouter.catalog import get_openrouter_catalog
+from hana_agent_oss.providers.provider_selector.qwen.catalog import get_qwen_catalog
+from hana_agent_oss.providers.provider_selector.maritaca.catalog import get_maritaca_catalog
 
 
 DEFAULT_LLM_CONFIG: dict[str, Any] = {
@@ -25,8 +28,25 @@ DEFAULT_LLM_CONFIG: dict[str, Any] = {
     # Groq "pensar antes de falar": True = modelos de raciocínio (qwen3/gpt-oss) pensam
     # antes de responder; False = resposta direta e rápida (reasoning_effort=none).
     "groqThinking": True,
+    # Qwen "pensar antes de falar" (so modelos qwen3.x): True = raciocina; False =
+    # resposta direta (enable_thinking=false). Aliases genericos (qwen-plus/turbo/max)
+    # nao sao afetados — ver _apply_thinking_control no provider.
+    "qwenThinking": True,
+    # DeepSeek so tem 2 niveis reais + desligado: "" (padrao deles = high),
+    # "high" ou "max" (ver reasoning_effort na doc oficial), ou "off" (thinking.type=disabled).
+    "deepseekReasoningEffort": "",
+    # OpenRouter "pensar antes de falar": so afeta modelos cujo supportedParameters
+    # inclui "reasoning" (ex.: Gemini 3.x, alguns Qwen/DeepSeek via OpenRouter).
+    "openrouterThinking": True,
+    # "Pensar" do MODELO DE AGENTE (loop de ferramentas), independente do chat.
+    # agentThinking = on/off (groq/qwen); agentReasoningEffort = nivel (deepseek/openrouter).
+    "agentThinking": True,
+    "agentReasoningEffort": "",
     "openrouterRoutingByModel": {},
     "visionModel": "gemini-3-flash-preview",
+    # Provider dono do visionModel. Vazio = inferir pelo id do modelo (catalog_provider_for_model).
+    # Usado pra ROTEAR imagem quando o provider do chat nao ve (reaproveita o visionModel).
+    "visionProvider": "",
     "ttsProvider": "edge",
     "ttsVoice": "",
     "ttsModel": "",
@@ -117,7 +137,7 @@ DEFAULT_CONNECTIONS: dict[str, Any] = {
 
 # Catalogo unificado dos providers LLM/STT/TTS.
 MODEL_CATALOG: dict[str, Any] = {
-    "llmProviders": ["gemini_api", "openrouter", "groq", "deepseek"],
+    "llmProviders": ["gemini_api", "openrouter", "groq", "deepseek", "qwen", "maritaca"],
     "imageProviders": ["gemini_api", "openrouter"],
     "models": [
         {
@@ -199,7 +219,7 @@ MODEL_CATALOG: dict[str, Any] = {
         },
         *GROQ_STATIC_MODELS,
     ],
-    "ttsProviders": ["edge", "gemini_tts", "google_cloud_tts", "azure", "cartesia", "minimax", "elevenlabs"],
+    "ttsProviders": ["edge", "gemini_tts", "google_cloud_tts", "azure", "cartesia", "minimax", "elevenlabs", "fishaudio"],
     "voices": [
         {"id": "pt-BR-FranciscaNeural", "label": "Edge Francisca", "provider": "edge"},
         {"id": "pt-BR-AntonioNeural", "label": "Edge Antonio", "provider": "edge"},
@@ -223,6 +243,7 @@ MODEL_CATALOG: dict[str, Any] = {
         {"id": "pt-BR-ThalitaNeural", "label": "Azure Thalita (pt-BR female - warm native Brazilian)", "provider": "azure"},
         {"id": "Portuguese_ConfidentWoman", "label": "Minimax Portuguese Confident Woman (pt-BR female)", "provider": "minimax"},
         {"id": DEFAULT_ELEVENLABS_VOICE, "label": "ElevenLabs documented sample voice", "provider": "elevenlabs"},
+        {"id": "", "label": "Fish Audio voz padrao (sem reference_id)", "provider": "fishaudio"},
         {"id": "Portuguese_LovelyLady", "label": "Minimax Portuguese Lovely Lady (pt-BR female)", "provider": "minimax"},
         {"id": "Portuguese_PlayfulGirl", "label": "Minimax Portuguese Playful Girl (pt-BR female)", "provider": "minimax"},
         {"id": "Kore", "label": "Gemini Kore", "provider": "gemini_tts"},
@@ -469,6 +490,26 @@ VOICE_PROVIDER_CATALOG: dict[str, Any] = {
         "supportsStyle": True,
         "supportsSpeakerBoost": True,
     },
+    {
+        "id": "fishaudio",
+        "label": "Fish Audio TTS",
+        "status": "active",
+        "requiresCredentials": True,
+        "inputModalities": ["text"],
+        "outputModalities": ["audio"],
+        "models": list(FISHAUDIO_TTS_MODELS),
+        "defaultModel": DEFAULT_FISHAUDIO_MODEL,
+        # Sem reference_id = voz padrao da Fish Audio. Cole um reference_id proprio
+        # (clonagem/voz publica escolhida no site) pra trocar de voz.
+        "voices": [
+            {"id": "", "label": "Voz padrao (sem reference_id)", "locale": "multilingual"},
+        ],
+        "defaultVoice": "",
+        "supportsRate": True,
+        "supportsPitch": False,
+        "supportsStreaming": True,
+        "notes": "s2.1-pro-free e gratuito (sem garantia de latencia); s2.1-pro/s2-pro/s1 sao pagos, mais baratos que ElevenLabs.",
+    },
     ],
     "ttsReadable": {
         "displayTextMayDiffer": True,
@@ -496,6 +537,14 @@ def normalize_catalog_provider(provider: Any) -> str:
         "deepseek": "deepseek",
         "deepseek_official": "deepseek",
         "deep_seek": "deepseek",
+        "qwen": "qwen",
+        "alibaba": "qwen",
+        "dashscope": "qwen",
+        "model_studio": "qwen",
+        "modelstudio": "qwen",
+        "maritaca": "maritaca",
+        "sabia": "maritaca",
+        "sabiá": "maritaca",
     }
     normalized = aliases.get(raw, raw or "").strip().lower()
     if not normalized:
@@ -515,7 +564,7 @@ def model_supports_vision(provider: Any, model_id: str, memory: MemoryStore | No
     p = normalize_catalog_provider(provider)
     if p == "gemini_api":
         return True
-    if p not in {"openrouter", "groq"}:
+    if p not in {"openrouter", "groq", "qwen", "maritaca"}:
         return False
     mid = str(model_id or "").strip()
     if not mid:
@@ -536,6 +585,12 @@ def model_supports_vision(provider: Any, model_id: str, memory: MemoryStore | No
         if p == "openrouter":
             from hana_agent_oss.providers.provider_selector.openrouter.catalog import get_openrouter_model
             info = get_openrouter_model(mid)
+        elif p == "qwen":
+            from hana_agent_oss.providers.provider_selector.qwen.catalog import get_qwen_model
+            info = get_qwen_model(mid)
+        elif p == "maritaca":
+            from hana_agent_oss.providers.provider_selector.maritaca.catalog import get_maritaca_model
+            info = get_maritaca_model(mid)
         else:
             from hana_agent_oss.providers.provider_selector.groq.catalog import get_groq_model
             info = get_groq_model(mid)
@@ -545,6 +600,59 @@ def model_supports_vision(provider: Any, model_id: str, memory: MemoryStore | No
         pass
 
     return False
+
+
+def catalog_provider_for_model(model_id: str, memory: MemoryStore | None = None) -> str:
+    """Best-effort: qual provider dono deste model id? "" quando nao acha.
+
+    Usado pra inferir o provider de visao quando so o visionModel esta setado.
+    Ordem barata primeiro (custom/estaticos), OpenRouter (rede, cacheado) por ultimo.
+    """
+    mid = str(model_id or "").strip()
+    if not mid:
+        return ""
+    if memory is not None:
+        try:
+            for item in memory.get_setting("custom_models", []) or []:
+                if isinstance(item, dict) and item.get("id") == mid and item.get("provider"):
+                    return normalize_catalog_provider(item.get("provider"))
+        except Exception:
+            pass
+    # Modelos estaticos do catalogo base (Gemini/Groq embutidos).
+    for item in MODEL_CATALOG.get("models", []):
+        if isinstance(item, dict) and item.get("id") == mid and item.get("provider"):
+            return str(item.get("provider"))
+    import importlib
+    for pid, module_path, fn in (
+        ("qwen", "hana_agent_oss.providers.provider_selector.qwen.catalog", "get_qwen_model"),
+        ("maritaca", "hana_agent_oss.providers.provider_selector.maritaca.catalog", "get_maritaca_model"),
+        ("groq", "hana_agent_oss.providers.provider_selector.groq.catalog", "get_groq_model"),
+        ("openrouter", "hana_agent_oss.providers.provider_selector.openrouter.catalog", "get_openrouter_model"),
+    ):
+        try:
+            getter = getattr(importlib.import_module(module_path), fn)
+            if getter(mid):
+                return pid
+        except Exception:
+            pass
+    return ""
+
+
+def resolve_vision_target(llm_config: dict[str, Any] | None, memory: MemoryStore | None = None) -> tuple[str, str]:
+    """(provider, model) pra rotear imagem quando o provider do chat nao ve.
+
+    Usa visionProvider explicito; se vazio, infere o provider pelo visionModel.
+    Retorna ("","") quando nao ha visionModel configurado.
+    """
+    cfg = llm_config if isinstance(llm_config, dict) else {}
+    vm = str(cfg.get("visionModel") or "").strip()
+    if not vm:
+        return "", ""
+    raw_vp = str(cfg.get("visionProvider") or "").strip()
+    vp = normalize_catalog_provider(raw_vp) if raw_vp else catalog_provider_for_model(vm, memory)
+    if not vp:
+        vp = "gemini_api"  # ultimo recurso (Gemini sempre aceita imagem)
+    return vp, vm
 
 
 def catalog_payload(memory: MemoryStore) -> dict[str, Any]:
@@ -557,6 +665,8 @@ def catalog_payload(memory: MemoryStore) -> dict[str, Any]:
     openrouter_models, openrouter_error = get_openrouter_catalog()
     groq_models, groq_error = get_groq_catalog()
     deepseek_models, deepseek_error = get_deepseek_catalog()
+    qwen_models, qwen_error = get_qwen_catalog()
+    maritaca_models, maritaca_error = get_maritaca_catalog()
     data["models"].extend(openrouter_models)
     data["models"] = [
         model
@@ -565,6 +675,8 @@ def catalog_payload(memory: MemoryStore) -> dict[str, Any]:
     ]
     data["models"].extend(groq_models)
     data["models"].extend(deepseek_models)
+    data["models"].extend(qwen_models)
+    data["models"].extend(maritaca_models)
     # Collect image-capable models from OpenRouter for the image provider selector.
     image_models = [
         model for model in openrouter_models
@@ -587,7 +699,17 @@ def catalog_payload(memory: MemoryStore) -> dict[str, Any]:
             "ok": deepseek_error is None,
             "error": deepseek_error,
             "modelCount": len(deepseek_models),
-        }
+        },
+        "qwen": {
+            "ok": qwen_error is None,
+            "error": qwen_error,
+            "modelCount": len(qwen_models),
+        },
+        "maritaca": {
+            "ok": maritaca_error is None,
+            "error": maritaca_error,
+            "modelCount": len(maritaca_models),
+        },
     }
     data["voiceProviders"] = VOICE_PROVIDER_CATALOG
     custom_models = memory.get_setting("custom_models", [])

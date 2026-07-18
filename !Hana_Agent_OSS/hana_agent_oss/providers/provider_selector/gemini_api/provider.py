@@ -176,7 +176,8 @@ class GeminiApiProvider:
                 if queries or sources:
                     grounding_data = {
                         "queries": queries,
-                        "sources": sources
+                        "sources": sources,
+                        "source": "gemini_native",
                     }
 
         meta = {
@@ -225,11 +226,16 @@ class GeminiApiProvider:
 
     @staticmethod
     def _registered_character_summary() -> str:
-        """Return a compact list of characters available for image tools."""
+        """Return a compact list of characters available for image tools.
+
+        Vazio ("") quando NENHUM personagem esta cadastrado — antes retornava um
+        "hana" fake, o que fazia o modelo tentar <gerar_imagem_personagem> e o
+        backend falhar sempre com "Personagem visual nao cadastrado: hana".
+        """
         root = Path(DEFAULT_CHARACTER_ROOT)
         names: list[str] = []
         if not root.is_dir():
-            return "hana"
+            return ""
         for folder in root.iterdir():
             if not folder.is_dir() or not (folder / "character.json").exists():
                 continue
@@ -245,13 +251,13 @@ class GeminiApiProvider:
             except Exception:
                 pass
             names.append(label)
-        return "; ".join(names) if names else "hana"
+        return "; ".join(names)
 
     @classmethod
     def _image_tool_instruction(cls) -> str:
         """Build the XML image action guide injected into Gemini system prompts."""
         characters = cls._registered_character_summary()
-        return (
+        generic = (
             "\n\n[IMAGE XML ACTION MANUAL]\n"
             "Image generation does not use function calling. To request image work, write one silent XML tag at the end of your answer.\n"
             "The backend executes only valid XML image tags. If you do not write a tag, no image will be generated.\n"
@@ -259,6 +265,18 @@ class GeminiApiProvider:
             "Never use image XML when Operador only asks about a previous image, asks which prompt was used, or discusses image generation behavior.\n"
             "For generic images, use exactly: <gerar_imagem>English prompt for the image</gerar_imagem>.\n"
             "For generic edits, use exactly: <editar_imagem>English edit instruction</editar_imagem>.\n"
+        )
+        if not characters:
+            # Nenhum personagem cadastrado: NAO oferece as tags de personagem —
+            # elas falhariam sempre com "Personagem visual nao cadastrado". Sem
+            # essa instrucao, o modelo para de disparar geracao de personagem a toa.
+            return generic + (
+                "No visual characters are registered on this system. Do NOT use "
+                "<gerar_imagem_personagem> or <editar_imagem_personagem> — there is no "
+                "character to render and any such tag will fail. Use only the generic image tags above.\n"
+                "Your visible sentence should say that you are starting/preparing the image, not that it is already ready.\n"
+            )
+        return generic + (
             "For Hana, 'you', 'sua', Nyra, Shogun, or registered characters, use exactly <gerar_imagem_personagem>{valid JSON}</gerar_imagem_personagem>.\n"
             "For character edits, use exactly <editar_imagem_personagem>{valid JSON}</editar_imagem_personagem>.\n"
             f"Currently registered visual characters: {characters}.\n"

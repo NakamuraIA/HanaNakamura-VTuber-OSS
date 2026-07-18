@@ -500,7 +500,12 @@ def _enable_fake_semantic(monkeypatch):
     return embedder
 
 
-def test_embed_pending_is_noop_when_disabled(tmp_path) -> None:
+def test_embed_pending_is_noop_when_disabled(tmp_path, monkeypatch) -> None:
+    # Hermetico: forca semantica DESLIGADA independente do .env do dev (load_dotenv
+    # do server.py pode ter injetado HANA_MEMORY_SEMANTIC=1 na sessao de teste).
+    from hana_agent_oss.memory import store as store_mod
+
+    monkeypatch.setattr(store_mod, "get_embedding_provider", lambda: None)
     memory = _store(tmp_path)
     memory.add_memory("tenho um gato persa", kind="long_term")
     result = memory.embed_pending_memories()

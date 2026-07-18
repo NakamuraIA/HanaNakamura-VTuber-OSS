@@ -613,6 +613,14 @@ class MemoryStore(SQLiteStore):
             query_vec = embed_query(clean)
             if not query_vec:
                 return {}
+            # So compara com vetores do MESMO modelo: espacos diferentes (fastembed vs
+            # openrouter, ou modelos distintos) nao sao comparaveis. Trocar de modelo
+            # deixa os antigos invisiveis ate serem re-indexados — nunca da lixo.
+            # Usa o provider local (patchavel em teste), igual o indexador.
+            _provider = get_embedding_provider()
+            active_model = getattr(_provider, "model", None) if _provider is not None else None
+            if not active_model:
+                return {}
             filter_sql, filter_params = self._status_filter_sql(status, alias="m")
             with self._connect() as conn:
                 rows = conn.execute(
@@ -620,9 +628,9 @@ class MemoryStore(SQLiteStore):
                     SELECT e.memory_id AS id, e.vector_json AS vector_json
                     FROM memory_embeddings e
                     JOIN memory_items m ON m.id = e.memory_id
-                    WHERE {filter_sql}
+                    WHERE {filter_sql} AND e.model = ?
                     """,
-                    tuple(filter_params),
+                    (*filter_params, active_model),
                 ).fetchall()
             scored: list[tuple[str, float]] = []
             for row in rows:
@@ -695,7 +703,7 @@ class MemoryStore(SQLiteStore):
                           vector_json = excluded.vector_json,
                           updated_at = excluded.updated_at
                         """,
-                        (str(row["id"]), "fastembed", provider.model, len(vector), _json_dumps(list(vector)), timestamp, timestamp),
+                        (str(row["id"]), getattr(provider, "backend", "fastembed"), provider.model, len(vector), _json_dumps(list(vector)), timestamp, timestamp),
                     )
                     conn.execute(
                         "UPDATE memory_items SET embedding_state = 'done' WHERE id = ?",

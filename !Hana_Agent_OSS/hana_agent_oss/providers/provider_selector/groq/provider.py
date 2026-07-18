@@ -8,10 +8,10 @@ from hana_agent_oss.providers.provider_selector.groq.catalog import (
     get_groq_model,
     groq_headers,
 )
-from hana_agent_oss.providers.provider_selector.openrouter.provider import OpenRouterProvider
+from hana_agent_oss.providers.provider_selector.openai_compatible import OpenAICompatibleProvider
 
 
-class GroqProvider(OpenRouterProvider):
+class GroqProvider(OpenAICompatibleProvider):
     """Groq LLM provider using Groq's OpenAI-compatible Chat Completions API."""
 
     aliases = {"groq", "groqcloud", "groq_cloud", "glock"}

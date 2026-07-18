@@ -7,7 +7,9 @@ from hana_agent_oss.providers.contracts import ProviderRequest, ProviderResponse
 from hana_agent_oss.providers.provider_selector.deepseek.provider import DeepSeekProvider
 from hana_agent_oss.providers.provider_selector.gemini_api.provider import GeminiApiProvider
 from hana_agent_oss.providers.provider_selector.groq.provider import GroqProvider
+from hana_agent_oss.providers.provider_selector.maritaca.provider import MaritacaProvider
 from hana_agent_oss.providers.provider_selector.openrouter.provider import OpenRouterProvider
+from hana_agent_oss.providers.provider_selector.qwen.provider import QwenProvider
 
 
 @dataclass(frozen=True)
@@ -77,6 +79,8 @@ class ProviderSelector:
             "openrouter": OpenRouterProvider(),
             "groq": GroqProvider(),
             "deepseek": DeepSeekProvider(),
+            "qwen": QwenProvider(),
+            "maritaca": MaritacaProvider(),
         }
         self._definitions = {
             "gemini_api": ProviderDefinition(
@@ -146,6 +150,63 @@ class ProviderSelector:
                     supports_rag=False,
                 ),
             ),
+            "qwen": ProviderDefinition(
+                provider_id="qwen",
+                display_name="Qwen (Alibaba Cloud Model Studio)",
+                default_model="qwen-plus",
+                rules=(
+                    "Use QWEN_API_KEY (ou DASHSCOPE_API_KEY).",
+                    "API OpenAI-compativel em dashscope-us.aliyuncs.com (chat + streaming + tools).",
+                    "Sem busca nativa, XML de imagem ou tools server-side do Gemini.",
+                ),
+                capabilities=ProviderCapabilities(
+                    multimodal_input=False,
+                    supports_image=False,
+                    supports_audio=False,
+                    supports_video=False,
+                    supports_pdf=False,
+                    supports_native_web_search=False,
+                    supports_streaming=True,
+                    supports_structured_output=True,
+                    supports_function_calling=True,
+                    supports_code_execution=False,
+                    supports_image_generation=False,
+                    supports_video_generation=False,
+                    supports_tts=False,
+                    supports_live_voice=False,
+                    supports_memory_embeddings=False,
+                    supports_rag=False,
+                ),
+            ),
+            "maritaca": ProviderDefinition(
+                provider_id="maritaca",
+                display_name="Maritaca AI (Sabia)",
+                default_model="sabia-4",
+                rules=(
+                    "Use MARITACA_API_KEY.",
+                    "API OpenAI-compativel em chat.maritaca.ai/api (chat + streaming + tools).",
+                    "Header de auth usa 'Key', nao 'Bearer'.",
+                    "Sem busca nativa, XML de imagem ou tools server-side do Gemini.",
+                ),
+                capabilities=ProviderCapabilities(
+                    multimodal_input=False,
+                    supports_image=False,
+                    supports_audio=False,
+                    supports_video=False,
+                    supports_pdf=False,
+                    supports_native_web_search=False,
+                    supports_streaming=True,
+                    supports_structured_output=False,
+                    supports_function_calling=True,
+                    supports_code_execution=False,
+                    supports_image_generation=False,
+                    supports_video_generation=False,
+                    supports_tts=False,
+                    supports_live_voice=False,
+                    supports_memory_embeddings=False,
+                    supports_rag=False,
+                ),
+            ),
             "groq": ProviderDefinition(
                 provider_id="groq",
                 display_name="Groq",
@@ -194,6 +255,12 @@ class ProviderSelector:
             "glock": "groq",
             "deepseek_official": "deepseek",
             "deep_seek": "deepseek",
+            "alibaba": "qwen",
+            "dashscope": "qwen",
+            "model_studio": "qwen",
+            "modelstudio": "qwen",
+            "sabia": "maritaca",
+            "sabiá": "maritaca",
         }.get(raw, raw or "gemini_api")
 
     def generate(self, request: ProviderRequest) -> ProviderResponse:

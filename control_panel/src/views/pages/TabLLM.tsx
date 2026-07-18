@@ -37,7 +37,27 @@ const PROVIDER_ALIASES: Record<string, string> = {
 const TTS_MODELS_BY_PROVIDER: Record<string, string[]> = {
   gemini_tts: ["gemini-3.1-flash-tts-preview"],
   elevenlabs: ["eleven_flash_v2_5", "eleven_turbo_v2_5", "eleven_multilingual_v2", "eleven_v3"],
+  fishaudio: ["s2.1-pro-free", "s2.1-pro", "s2-pro", "s1"],
 };
+
+// Escala unificada de raciocinio do OpenRouter. "" = automatico (chat pensa fundo,
+// voz/terminal pensam pouco); um nivel explicito fixa o esforco em todos os canais.
+const OPENROUTER_REASONING_LEVELS: { value: string; label: string }[] = [
+  { value: "", label: "Auto" },
+  { value: "none", label: "Desligado" },
+  { value: "minimal", label: "Minimo" },
+  { value: "low", label: "Baixo" },
+  { value: "medium", label: "Medio" },
+  { value: "high", label: "Alto" },
+  { value: "max", label: "Maximo" },
+];
+
+// DeepSeek so tem 2 niveis reais (a API deles mapeia low/medium -> high, e xhigh -> max).
+const DEEPSEEK_REASONING_LEVELS: { value: string; label: string }[] = [
+  { value: "off", label: "Desligado" },
+  { value: "high", label: "Alto" },
+  { value: "max", label: "Maximo" },
+];
 
 function normalizeProvider(provider?: string) {
   const value = String(provider || "").trim().toLowerCase();
@@ -176,9 +196,12 @@ export function TabLLM() {
     () => catalogModels.filter((model) => model.provider === config?.llmProvider && (model.outputModalities || []).includes("text")),
     [catalogModels, config?.llmProvider],
   );
+  // Provider de visão: pode ser SEPARADO do chat (pra rotear imagem pra ele quando
+  // o chat não vê). Vazio = usar o mesmo do chat (comportamento antigo preservado).
+  const visionProvider = (config?.visionProvider || config?.llmProvider || "") as string;
   const availableVisionModels = useMemo(
-    () => availableLlmModels.filter((model) => model.supportsVision),
-    [availableLlmModels],
+    () => catalogModels.filter((model) => model.provider === visionProvider && model.supportsVision),
+    [catalogModels, visionProvider],
   );
   const availableTtsVoices = useMemo(
     () => catalogVoices.filter((voice) => voice.provider === config?.ttsProvider),
@@ -200,8 +223,8 @@ export function TabLLM() {
     [availableLlmModels, config?.llmModel, config?.llmProvider],
   );
   const visionPickerOptions = useMemo(
-    () => ensureCurrentOption(availableVisionModels.map(modelPickerOption), config?.visionModel || "", `${config?.llmProvider || "llm"}:vision`),
-    [availableVisionModels, config?.llmProvider, config?.visionModel],
+    () => ensureCurrentOption(availableVisionModels.map(modelPickerOption), config?.visionModel || "", `${visionProvider || "llm"}:vision`),
+    [availableVisionModels, visionProvider, config?.visionModel],
   );
   // Effective agent provider: blank means "same as the main provider".
   const agentProvider = (config?.agentProvider || config?.llmProvider || "") as string;
@@ -305,6 +328,19 @@ export function TabLLM() {
     audio.playClick();
   };
 
+  const selectVisionProvider = (providerValue: string) => {
+    // "" = mesmo do chat. Ao trocar, escolhe o 1º modelo com visão desse provider.
+    const provider = providerValue ? normalizeProvider(providerValue) : "";
+    const effective = provider || (config?.llmProvider || "");
+    const firstVisionModel = catalogModels.find((item) => item.provider === effective && item.supportsVision);
+    setConfig(prev => prev ? {
+      ...prev,
+      visionProvider: provider,
+      visionModel: firstVisionModel?.id || prev.visionModel || "",
+    } : prev);
+    audio.playClick();
+  };
+
   // Keeps chat TTS defaults valid when the provider changes.
   // Campos de TTS que pertencem a cada provider (voz custom, controles, etc).
   const TTS_PROVIDER_FIELDS = [
@@ -320,6 +356,11 @@ export function TabLLM() {
       ttsModel: "eleven_flash_v2_5", ttsVoice: "JBFqnCBsd6RMkjVDRZzb", ttsLanguage: "pt",
       ttsSpeed: 1, ttsPitch: 0, ttsStreaming: false,
       ttsStability: 0.5, ttsSimilarity: 0.75, ttsStyle: 0, ttsSpeakerBoost: true,
+    },
+    fishaudio: {
+      // Voz vazia = padrao da Fish. Cole um reference_id (voz clonada/publica do site) no campo Voz.
+      ttsModel: "s2.1-pro-free", ttsVoice: "", ttsLanguage: "pt",
+      ttsSpeed: 1, ttsPitch: 0, ttsStreaming: false,
     },
   };
 
@@ -427,8 +468,9 @@ export function TabLLM() {
   const ttsUsesSpeed = config.ttsProvider !== "gemini_tts";
   const ttsUsesPitch = !["gemini_tts", "cartesia", "elevenlabs"].includes(config.ttsProvider);
   const ttsUsesPrompt = config.ttsProvider === "gemini_tts";
-  const ttsCanStream = config.ttsProvider === "google_cloud_tts";
+  const ttsCanStream = config.ttsProvider === "google_cloud_tts" || config.ttsProvider === "fishaudio";
   const ttsIsElevenLabs = config.ttsProvider === "elevenlabs";
+  const ttsIsFishAudio = config.ttsProvider === "fishaudio";
 
   return (
     <div className="w-full h-full bg-[var(--bg-sidebar)] backdrop-blur-2xl p-8 overflow-y-auto custom-scrollbar flex flex-col relative shadow-2xl transition-all duration-500">
@@ -493,6 +535,44 @@ export function TabLLM() {
               </span>
             </div>
 
+            {config.llmProvider === "openrouter" && (
+              <>
+                <span className="text-sm font-bold text-[var(--text-secondary)] md:pl-4 uppercase tracking-wider">Esforço de raciocínio:</span>
+                <div className="flex flex-col gap-2 bg-[rgba(0,0,0,0.4)] p-3 rounded-lg border border-[var(--border-strong)] shadow-inner md:col-span-3">
+                  {(() => {
+                    const current = config.openrouterReasoningEffort || "";
+                    const index = OPENROUTER_REASONING_LEVELS.findIndex((lvl) => lvl.value === current);
+                    const safeIndex = index >= 0 ? index : 0;
+                    return (
+                      <>
+                        <div className="flex items-center gap-3">
+                          <span className="text-[11px] font-bold uppercase text-[var(--text-muted)]">Mais rápido</span>
+                          <input
+                            type="range"
+                            min={0}
+                            max={OPENROUTER_REASONING_LEVELS.length - 1}
+                            step={1}
+                            value={safeIndex}
+                            onChange={(e) => updateField("openrouterReasoningEffort", OPENROUTER_REASONING_LEVELS[Number(e.target.value)].value)}
+                            className="w-full accent-[var(--purple-neon)] h-2.5 bg-[rgba(255,255,255,0.05)] rounded-lg appearance-none cursor-pointer"
+                          />
+                          <span className="text-[11px] font-bold uppercase text-[var(--text-muted)]">Mais inteligente</span>
+                          <span className="text-sm font-bold font-mono text-white bg-[var(--purple-neon)] px-2 py-1 rounded min-w-[70px] text-center shadow-[0_0_10px_var(--purple-neon)]">
+                            {OPENROUTER_REASONING_LEVELS[safeIndex].label}
+                          </span>
+                        </div>
+                        <span className="text-xs text-[var(--text-secondary)]">
+                          {current === ""
+                            ? "Automático: chat pensa fundo; voz/terminal pensam pouco (effort=low). Só afeta modelos com reasoning suportado."
+                            : `Fixado em "${OPENROUTER_REASONING_LEVELS[safeIndex].label}" em todos os canais (chat/voz/terminal). Só afeta modelos com reasoning suportado; nível "Nenhum" desliga o raciocínio.`}
+                        </span>
+                      </>
+                    );
+                  })()}
+                </div>
+              </>
+            )}
+
             {config.llmProvider === "groq" && (
               <>
                 <span className="text-sm font-bold text-[var(--text-secondary)] md:pl-4 uppercase tracking-wider">Pensar antes de falar:</span>
@@ -509,6 +589,62 @@ export function TabLLM() {
                       ? "Liga: chat pensa fundo; voz/terminal pensam um pouco (rápido, mas acertam hora/lógica)."
                       : "Desliga: resposta direta e rápida em todos os canais, sem raciocínio."}
                   </span>
+                </div>
+              </>
+            )}
+
+            {config.llmProvider === "qwen" && (
+              <>
+                <span className="text-sm font-bold text-[var(--text-secondary)] md:pl-4 uppercase tracking-wider">Pensar antes de falar:</span>
+                <div className="flex items-center gap-3 bg-[rgba(0,0,0,0.4)] p-2 rounded-lg border border-[var(--border-strong)] shadow-inner md:col-span-3">
+                  <button
+                    type="button"
+                    onClick={() => updateField("qwenThinking", !(config.qwenThinking ?? true))}
+                    className={`relative h-6 w-11 rounded-full transition-colors ${(config.qwenThinking ?? true) ? "bg-[var(--purple-neon)]" : "bg-[rgba(255,255,255,0.15)]"}`}
+                  >
+                    <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white transition-all ${(config.qwenThinking ?? true) ? "left-[22px]" : "left-0.5"}`} />
+                  </button>
+                  <span className="text-xs text-[var(--text-secondary)]">
+                    {(config.qwenThinking ?? true)
+                      ? "Liga: chat pensa fundo (sem limite); voz/terminal pensam pouco (orçamento de ~300 tokens, mais rápido)."
+                      : "Desliga: resposta direta e rápida em todos os canais, sem raciocínio. So afeta modelos qwen3.x (aliases genericos qwen-plus/turbo/max nao sao tocados)."}
+                  </span>
+                </div>
+              </>
+            )}
+
+            {config.llmProvider === "deepseek" && (
+              <>
+                <span className="text-sm font-bold text-[var(--text-secondary)] md:pl-4 uppercase tracking-wider">Esforço de raciocínio:</span>
+                <div className="flex flex-col gap-2 bg-[rgba(0,0,0,0.4)] p-3 rounded-lg border border-[var(--border-strong)] shadow-inner md:col-span-3">
+                  {(() => {
+                    const current = config.deepseekReasoningEffort || "high";
+                    const index = DEEPSEEK_REASONING_LEVELS.findIndex((lvl) => lvl.value === current);
+                    const safeIndex = index >= 0 ? index : 1;
+                    return (
+                      <>
+                        <div className="flex items-center gap-3">
+                          <span className="text-[11px] font-bold uppercase text-[var(--text-muted)]">Mais rápido</span>
+                          <input
+                            type="range"
+                            min={0}
+                            max={DEEPSEEK_REASONING_LEVELS.length - 1}
+                            step={1}
+                            value={safeIndex}
+                            onChange={(e) => updateField("deepseekReasoningEffort", DEEPSEEK_REASONING_LEVELS[Number(e.target.value)].value)}
+                            className="w-full accent-[var(--purple-neon)] h-2.5 bg-[rgba(255,255,255,0.05)] rounded-lg appearance-none cursor-pointer"
+                          />
+                          <span className="text-[11px] font-bold uppercase text-[var(--text-muted)]">Mais inteligente</span>
+                          <span className="text-sm font-bold font-mono text-white bg-[var(--purple-neon)] px-2 py-1 rounded min-w-[70px] text-center shadow-[0_0_10px_var(--purple-neon)]">
+                            {DEEPSEEK_REASONING_LEVELS[safeIndex].label}
+                          </span>
+                        </div>
+                        <span className="text-xs text-[var(--text-secondary)]">
+                          DeepSeek so tem 2 niveis reais (a API deles mapeia "baixo/medio" pra "Alto" de qualquer forma) mais desligado — nao existe uma escala continua como no OpenRouter.
+                        </span>
+                      </>
+                    );
+                  })()}
                 </div>
               </>
             )}
@@ -641,18 +777,32 @@ export function TabLLM() {
             <h3 className="font-bold text-[var(--text-primary)] text-lg tracking-wide">Visão Computacional</h3>
           </div>
           <p className="text-xs text-[var(--text-muted)] mb-5 relative z-10">
-            O <b>olho da Hana</b>: usado na visão sob demanda (ela ver sua tela na conversa) e no
-            co-piloto (<code>screen_find</code> localiza botões/elementos pra ela clicar). Modelos
-            Gemini apontam coordenadas com precisão — recomendado Gemini 3 Flash.
+            O <b>olho da Hana</b>: visão sob demanda (ela vê sua tela), co-piloto (<code>screen_find</code>)
+            e <b>roteamento de imagem</b> — quando chega uma imagem (chat/Discord) e o provider do chat
+            não enxerga, ela manda a imagem pra ESTE provider/modelo em vez de ignorar. Deixe o provider
+            vazio pra usar o mesmo do chat.
           </p>
-          <div className="grid grid-cols-1 md:grid-cols-[120px_1fr] gap-6 items-center relative z-10">
+          <div className="grid grid-cols-1 md:grid-cols-[120px_1fr] gap-4 items-center relative z-10">
+            <span className="text-sm font-bold text-[var(--text-secondary)] uppercase tracking-wider">Provedor Vision:</span>
+            <div className="relative w-full md:w-2/3">
+              <select
+                className="w-full appearance-none bg-black/60 border border-[var(--border-strong)] hover:border-emerald-500/50 text-white rounded-lg p-2.5 pr-10 outline-none font-mono text-sm focus:ring-2 focus:ring-emerald-500 transition-all shadow-inner cursor-pointer"
+                value={config.visionProvider || ""}
+                onChange={(e) => selectVisionProvider(e.target.value)}
+              >
+                <option value="">Mesmo do chat ({(config.llmProvider || "").toUpperCase()})</option>
+                {llmProviders.map((p) => <option key={p} value={p}>{p.toUpperCase()}</option>)}
+              </select>
+              <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-emerald-400 font-bold">▼</div>
+            </div>
+
             <span className="text-sm font-bold text-[var(--text-secondary)] uppercase tracking-wider">Modelo Vision:</span>
             <div className="w-full md:w-2/3">
               <CatalogPicker
                 value={config.visionModel}
                 options={visionPickerOptions}
                 onChange={(value) => updateField("visionModel", value)}
-                favoriteNamespace={`vision:${config.llmProvider}`}
+                favoriteNamespace={`vision:${visionProvider}`}
                 placeholder={availableVisionModels.length === 0 ? "Provider sem suporte a visao" : "Selecione um modelo"}
                 searchPlaceholder="Buscar modelo de visao..."
                 emptyMessage="Nenhum modelo de visao encontrado."
@@ -724,6 +874,65 @@ export function TabLLM() {
                 Com limite, se estourar a Hana avisa o que fez e o que faltou (nunca corta no silêncio).
               </span>
             </div>
+
+            {/* Pensar do MODELO DE AGENTE — independente do chat. Slider (openrouter/deepseek) ou toggle (groq/qwen). */}
+            {(agentProvider === "openrouter" || agentProvider === "deepseek") && (
+              <>
+                <span className="text-sm font-bold text-[var(--text-secondary)] uppercase tracking-wider">Pensar (agente):</span>
+                <div className="flex flex-col gap-2 bg-[rgba(0,0,0,0.4)] p-3 rounded-lg border border-[var(--border-strong)] shadow-inner w-full md:w-2/3">
+                  {(() => {
+                    const levels = agentProvider === "deepseek" ? DEEPSEEK_REASONING_LEVELS : OPENROUTER_REASONING_LEVELS;
+                    const fallback = agentProvider === "deepseek" ? "high" : "";
+                    const current = config.agentReasoningEffort || fallback;
+                    const index = levels.findIndex((lvl) => lvl.value === current);
+                    const safeIndex = index >= 0 ? index : 0;
+                    return (
+                      <>
+                        <div className="flex items-center gap-3">
+                          <span className="text-[11px] font-bold uppercase text-[var(--text-muted)]">Mais rápido</span>
+                          <input
+                            type="range"
+                            min={0}
+                            max={levels.length - 1}
+                            step={1}
+                            value={safeIndex}
+                            onChange={(e) => updateField("agentReasoningEffort", levels[Number(e.target.value)].value)}
+                            className="w-full accent-amber-400 h-2.5 bg-[rgba(255,255,255,0.05)] rounded-lg appearance-none cursor-pointer"
+                          />
+                          <span className="text-[11px] font-bold uppercase text-[var(--text-muted)]">Mais inteligente</span>
+                          <span className="text-sm font-bold font-mono text-white bg-amber-500 px-2 py-1 rounded min-w-[70px] text-center shadow-[0_0_10px_rgba(245,158,11,0.7)]">
+                            {levels[safeIndex].label}
+                          </span>
+                        </div>
+                        <span className="text-xs text-[var(--text-secondary)]">
+                          Esforço de raciocínio SÓ do modelo de agente (quando usa ferramentas). Não mexe no chat normal.
+                        </span>
+                      </>
+                    );
+                  })()}
+                </div>
+              </>
+            )}
+
+            {(agentProvider === "groq" || agentProvider === "qwen") && (
+              <>
+                <span className="text-sm font-bold text-[var(--text-secondary)] uppercase tracking-wider">Pensar (agente):</span>
+                <div className="flex items-center gap-3 bg-[rgba(0,0,0,0.4)] p-2 rounded-lg border border-[var(--border-strong)] shadow-inner w-full md:w-2/3">
+                  <button
+                    type="button"
+                    onClick={() => updateField("agentThinking", !(config.agentThinking ?? true))}
+                    className={`relative h-6 w-11 rounded-full transition-colors ${(config.agentThinking ?? true) ? "bg-amber-500" : "bg-[rgba(255,255,255,0.15)]"}`}
+                  >
+                    <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white transition-all ${(config.agentThinking ?? true) ? "left-[22px]" : "left-0.5"}`} />
+                  </button>
+                  <span className="text-xs text-[var(--text-secondary)]">
+                    {(config.agentThinking ?? true)
+                      ? "Liga: o modelo de agente raciocina antes de agir com ferramentas."
+                      : "Desliga: agente responde direto/rápido, sem raciocínio. Não mexe no chat normal."}
+                  </span>
+                </div>
+              </>
+            )}
           </div>
         </Card>
 
@@ -800,6 +1009,18 @@ export function TabLLM() {
                     if (id) setRememberedVoices(rememberVoice(config.ttsProvider, id));
                   }}
                   placeholder="Cole qualquer Voice ID da sua biblioteca ElevenLabs"
+                />
+              )}
+              {ttsIsFishAudio && (
+                <input
+                  className="w-full rounded-lg border border-pink-400/20 bg-black/60 p-2.5 font-mono text-sm text-white outline-none focus:ring-2 focus:ring-pink-500"
+                  value={config.ttsVoice}
+                  onChange={(event) => updateField("ttsVoice", event.target.value.trim())}
+                  onBlur={(event) => {
+                    const id = event.target.value.trim();
+                    if (id) setRememberedVoices(rememberVoice(config.ttsProvider, id));
+                  }}
+                  placeholder="Cole um reference_id do Fish Audio (vazio = voz padrao)"
                 />
               )}
             </div>
@@ -902,7 +1123,7 @@ export function TabLLM() {
                 Testar TTS do Chat
               </Button>
               <span className="text-xs text-[var(--text-secondary)] bg-[rgba(0,0,0,0.4)] px-4 py-2 rounded-lg border border-[var(--border-strong)] font-mono">
-                <span className="text-pink-300">Info:</span> {ttsIsElevenLabs ? "Voice ID livre, modelos v2.5/v3 e controles ElevenLabs ativos." : ttsUsesSpeed ? "Controles numericos disponiveis conforme o provider." : "Gemini usa prompt de atuacao; rate/pitch ficam desativados aqui."}
+                <span className="text-pink-300">Info:</span> {ttsIsElevenLabs ? "Voice ID livre, modelos v2.5/v3 e controles ElevenLabs ativos." : ttsIsFishAudio ? "Fish Audio: s2.1-pro-free e gratis; cole um reference_id pra trocar de voz." : ttsUsesSpeed ? "Controles numericos disponiveis conforme o provider." : "Gemini usa prompt de atuacao; rate/pitch ficam desativados aqui."}
               </span>
               {ttsTestStatus && (
                 <span className="text-xs text-pink-100/80 bg-pink-500/10 px-4 py-2 rounded-lg border border-pink-400/20 font-mono">

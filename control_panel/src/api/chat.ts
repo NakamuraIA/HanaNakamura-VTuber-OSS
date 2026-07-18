@@ -20,7 +20,9 @@ export const ChatApi = {
     onActivity: (activity: { event?: string; label?: string; detail?: string }) => void,
     onMedia: (media: NonNullable<ChatMessage["media"]>[0]) => void,
     onDone: () => void,
-    onError: (err: unknown) => void
+    onError: (err: unknown) => void,
+    onReasoning?: (activity: { label: string; detail: string }) => void,
+    onToolActivity?: (event: { kind: string; tool: string; args?: Record<string, unknown>; result?: Record<string, unknown> }) => void
   ): { ws: WebSocket; send: (msg: string, imgs?: string[]) => void } => {
     const ws = new WebSocket(`${WS_URL}/ws/chat`);
 
@@ -57,6 +59,13 @@ export const ChatApi = {
           onMedia(data.media);
         } else if (data.type === "done") {
           onDone();
+        } else if (data.type === "reasoning") {
+          onReasoning?.({
+            label: "Hana está pensando...",
+            detail: data.content || "",
+          });
+        } else if (data.type === "tool_activity") {
+          onToolActivity?.(data.event || {});
         } else if (data.type === "error") {
           onError(data.content);
         }

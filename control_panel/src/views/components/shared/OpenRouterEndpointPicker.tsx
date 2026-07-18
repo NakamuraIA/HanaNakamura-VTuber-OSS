@@ -104,6 +104,11 @@ export function OpenRouterEndpointPicker({ model, value, onChange, compact = fal
       badges: [
         { label: endpoint.status || "unknown", tone: endpoint.status === "online" ? "green" as const : "amber" as const },
         ...(endpoint.quantization ? [{ label: endpoint.quantization, tone: "purple" as const }] : []),
+        // A Hana sempre manda "tools" na requisicao (MCP/Tavily/terminal); um endpoint
+        // sem suporte a isso quebra com "No endpoints found" ao ser fixado sem fallback.
+        ...(endpoint.supportedParameters && !endpoint.supportedParameters.includes("tools")
+          ? [{ label: "sem tools — quebra c/ ferramentas", tone: "pink" as const }]
+          : []),
       ],
     })),
   ], [endpoints]);

@@ -79,7 +79,14 @@ def test_run_text_turn_attaches_capture_with_dynamic_mime(monkeypatch, tmp_path)
 
     result = __import__("asyncio").run(
         chat_service.run_text_turn(
-            {"text": "olha minha tela", "provider": "gemini_api", "model": "gemini-3.5-flash"},
+            {
+                "text": "olha minha tela",
+                "provider": "gemini_api",
+                "model": "gemini-3.5-flash",
+                # Auto screen capture ("visao sob demanda") is scoped to Terminal Agente/voz;
+                # the Chat do Controle never captures the screen on its own (attachment-only).
+                "channel": "terminal_agent",
+            },
             core=object(),
             memory=memory,
         )
@@ -88,3 +95,38 @@ def test_run_text_turn_attaches_capture_with_dynamic_mime(monkeypatch, tmp_path)
     assert result["ok"] is True
     assert captured["attachments"][0]["name"] == "screen_capture.jpg"
     assert captured["attachments"][0]["type"] == "image/jpeg"
+
+
+def test_run_text_turn_does_not_auto_capture_screen_in_control_center(monkeypatch, tmp_path) -> None:
+    """Chat do Controle (control_center) never auto-captures the screen; only Terminal Agente/voz do."""
+    from hana_agent_oss.api.services import chat as chat_service
+    from hana_agent_oss.modules.vision import periodic_vision
+
+    memory = MemoryStore(db_path=tmp_path / "memory.sqlite3", events_path=tmp_path / "events.jsonl")
+    memory.set_setting("connections_config", {"visao": True})
+    captured = {}
+
+    class FakeVision:
+        def __init__(self, memory=None):
+            self.memory = memory
+
+        def capturar(self):
+            raise AssertionError("screen capture should not run for the control_center channel")
+
+    def fake_provider(request):
+        captured["attachments"] = request.attachments
+        return ProviderResponse(ok=True, text="Oi!", meta={"nativeSearch": False})
+
+    monkeypatch.setattr(periodic_vision, "VisaoNyra", FakeVision)
+    monkeypatch.setattr(chat_service.PROVIDER_SELECTOR, "generate", fake_provider)
+
+    result = __import__("asyncio").run(
+        chat_service.run_text_turn(
+            {"text": "oi", "provider": "gemini_api", "model": "gemini-3.5-flash", "channel": "control_center"},
+            core=object(),
+            memory=memory,
+        )
+    )
+
+    assert result["ok"] is True
+    assert captured["attachments"] == []

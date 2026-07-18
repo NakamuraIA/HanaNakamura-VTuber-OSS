@@ -26,7 +26,7 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
-DEFAULT_VISION_QUALITY_PROFILE = "full_hd_png"
+DEFAULT_VISION_QUALITY_PROFILE = "readable_jpeg"
 
 VISION_QUALITY_PROFILES: dict[str, dict[str, Any]] = {
     "full_hd_png": {

@@ -256,10 +256,6 @@ class EdgeTTSProvider:
             if chunk.get("type") == "audio" and chunk.get("data"):
                 yield chunk["data"]
 
-
-MotorTTSEdge = EdgeTTSProvider
-
-
 class EdgeTTSPlayer:
     """Blocking local MP3 player for backend-owned Edge TTS playback."""
 

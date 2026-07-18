@@ -81,9 +81,6 @@ def _mime_type_for_path(path: str) -> str:
     }.get(ext, "image/png")
 
 
-DEFAULT_OUTPUT_DIR = _default_output_dir()
-
-
 class HanaImageGen(BaseImageProvider):
     """Google Gemini image generator/editor with character references. Inherits BaseImageProvider."""
 

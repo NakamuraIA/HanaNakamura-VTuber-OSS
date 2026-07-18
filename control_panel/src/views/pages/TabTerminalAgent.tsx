@@ -56,6 +56,7 @@ const FALLBACK_TTS_OPTIONS: ProviderOption[] = [
   { id: "gemini_tts", label: "Gemini API TTS", status: "active" },
   { id: "google_cloud_tts", label: "Google Cloud TTS", status: "active" },
   { id: "elevenlabs", label: "ElevenLabs TTS", status: "active" },
+  { id: "fishaudio", label: "Fish Audio TTS", status: "active" },
 ];
 
 const GEMINI_TTS_VOICES = [
@@ -108,6 +109,9 @@ const FALLBACK_TTS_VOICES_BY_PROVIDER: Record<string, { value: string; label: st
   ],
   elevenlabs: [
     { value: "JBFqnCBsd6RMkjVDRZzb", label: "Documented sample voice" },
+  ],
+  fishaudio: [
+    { value: "", label: "Voz padrao (sem reference_id)" },
   ],
   local: [{ value: "local-default", label: "Local default" }],
 };
@@ -493,9 +497,10 @@ export function TabTerminalAgent({ isActive }: TabTerminalAgentProps) {
   const activeSttProvider = sttOptions.find((item) => item.id === voiceConfig.sttProvider);
   const activeTtsProvider = ttsOptions.find((item) => item.id === voiceConfig.ttsProvider);
   const ttsUsesSpeed = voiceConfig.ttsProvider !== "gemini_tts";
-  const ttsUsesPitch = !["gemini_tts", "cartesia", "elevenlabs"].includes(voiceConfig.ttsProvider);
-  const ttsCanStream = voiceConfig.ttsProvider === "google_cloud_tts";
+  const ttsUsesPitch = !["gemini_tts", "cartesia", "elevenlabs", "fishaudio"].includes(voiceConfig.ttsProvider);
+  const ttsCanStream = ["google_cloud_tts", "fishaudio"].includes(voiceConfig.ttsProvider);
   const ttsIsElevenLabs = voiceConfig.ttsProvider === "elevenlabs";
+  const ttsIsFishAudio = voiceConfig.ttsProvider === "fishaudio";
   const [rememberedVoices, setRememberedVoices] = useState<string[]>([]);
   useEffect(() => {
     setRememberedVoices(readRememberedVoices(voiceConfig.ttsProvider || ""));
@@ -1236,7 +1241,7 @@ export function TabTerminalAgent({ isActive }: TabTerminalAgentProps) {
               if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) appendCommand();
             }}
             className="h-[76px] w-full resize-none rounded-2xl border border-zinc-700 bg-[#050608] py-3 pl-4 pr-14 font-mono text-sm text-zinc-100 outline-none placeholder:text-zinc-600 focus:border-cyan-400/70"
-            placeholder="operador> comando manual..."
+            placeholder="nakamura> comando manual..."
           />
           <button
             onClick={appendCommand}
@@ -1420,7 +1425,7 @@ export function TabTerminalAgent({ isActive }: TabTerminalAgentProps) {
                   showAdvancedFilters={false}
                   compact
                 />
-                {ttsIsElevenLabs && (
+                {(ttsIsElevenLabs || ttsIsFishAudio) && (
                   <input
                     value={voiceConfig.ttsVoice}
                     onChange={(event) => updateVoiceConfig({ ttsVoice: event.target.value.trim() })}
@@ -1429,7 +1434,7 @@ export function TabTerminalAgent({ isActive }: TabTerminalAgentProps) {
                       if (id) setRememberedVoices(rememberVoice(voiceConfig.ttsProvider, id));
                     }}
                     className="mt-2 w-full rounded-md border border-pink-400/20 bg-[#050608] px-3 py-2 font-mono text-zinc-100 outline-none focus:border-pink-400/60"
-                    placeholder="Cole qualquer Voice ID da sua biblioteca"
+                    placeholder={ttsIsFishAudio ? "Cole um reference_id do Fish Audio (vazio = voz padrao)" : "Cole qualquer Voice ID da sua biblioteca"}
                   />
                 )}
               </div>

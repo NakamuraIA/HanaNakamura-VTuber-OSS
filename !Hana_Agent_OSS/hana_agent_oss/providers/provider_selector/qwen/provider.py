@@ -2,49 +2,50 @@ from __future__ import annotations
 
 from typing import Any
 
-from hana_agent_oss.providers.provider_selector.deepseek.catalog import (
-    DEEPSEEK_API_KEY_ENV,
-    DEEPSEEK_CHAT_COMPLETIONS_URL,
-    deepseek_headers,
-    get_deepseek_model,
-)
 from hana_agent_oss.providers.provider_selector.openai_compatible import OpenAICompatibleProvider
+from hana_agent_oss.providers.provider_selector.qwen.catalog import (
+    QWEN_API_KEY_ENV,
+    QWEN_CHAT_COMPLETIONS_URL,
+    get_qwen_model,
+    qwen_headers,
+)
 
 
-class DeepSeekProvider(OpenAICompatibleProvider):
-    """DeepSeek (official, api.deepseek.com) via its OpenAI-compatible API.
+class QwenProvider(OpenAICompatibleProvider):
+    """Alibaba Cloud Model Studio (Qwen) via its OpenAI-compatible API.
 
     Reuses the whole OpenAI-compatible path (generate, generate_stream,
     tool loop) — only the endpoint, key and catalog differ. So token streaming and
     function calling work out of the box.
     """
 
-    aliases = {"deepseek", "deepseek_official", "deep_seek"}
-    provider_id = "deepseek"
-    provider_label = "DeepSeek"
-    api_key_env = DEEPSEEK_API_KEY_ENV
-    default_model = "deepseek-v4-flash"
-    chat_completions_url = DEEPSEEK_CHAT_COMPLETIONS_URL
+    aliases = {"qwen", "alibaba", "dashscope", "model_studio", "modelstudio"}
+    provider_id = "qwen"
+    provider_label = "Qwen"
+    api_key_env = QWEN_API_KEY_ENV
+    default_model = "qwen-plus"
+    chat_completions_url = QWEN_CHAT_COMPLETIONS_URL
     http_timeout_seconds = 120
     tool_rounds = 20
     supports_plugins = False
-    provider_status_title = "DEEPSEEK PROVIDER STATUS"
+    provider_status_title = "QWEN PROVIDER STATUS"
 
     def _catalog_model(self, model_id: str) -> dict[str, Any] | None:
-        """Read DeepSeek model metadata from the static catalog."""
-        return get_deepseek_model(model_id)
+        """Read Qwen model metadata from the static catalog."""
+        return get_qwen_model(model_id)
 
     def _headers(self) -> dict[str, str]:
-        """Build DeepSeek request headers without exposing credentials."""
-        return deepseek_headers(include_auth=True)
+        """Build Qwen request headers without exposing credentials."""
+        return qwen_headers(include_auth=True)
 
     @staticmethod
     def _capabilities_payload(model_info: dict[str, Any] | None) -> dict[str, Any]:
-        """Expose DeepSeek model capabilities using the selector capability keys."""
+        """Expose Qwen model capabilities using the selector capability keys."""
         supported_parameters = model_info.get("supportedParameters") if isinstance(model_info, dict) else []
+        supports_vision = bool(model_info and model_info.get("supportsVision"))
         return {
-            "multimodal_input": False,
-            "supports_image": False,
+            "multimodal_input": supports_vision,
+            "supports_image": supports_vision,
             "supports_audio": False,
             "supports_video": False,
             "supports_pdf": False,

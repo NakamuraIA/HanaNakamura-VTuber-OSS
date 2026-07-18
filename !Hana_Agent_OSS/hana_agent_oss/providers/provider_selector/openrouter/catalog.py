@@ -13,6 +13,13 @@ OPENROUTER_MODELS_URL = f"{OPENROUTER_BASE_URL}/models"
 OPENROUTER_CATALOG_CACHE_SECONDS = 300
 OPENROUTER_ENDPOINT_CACHE_SECONDS = 300
 
+# OpenRouter's endpoints API returns short internal codenames for some providers
+# (e.g. "WandB") instead of the display name shown on openrouter.ai. Prettify the
+# ones that would otherwise be hard to recognize/search for in the picker.
+OPENROUTER_PROVIDER_DISPLAY_NAMES = {
+    "wandb": "Weights & Biases",
+}
+
 _MODEL_CACHE: dict[str, Any] = {"loaded_at": 0.0, "models": [], "error": None}
 _ENDPOINT_CACHE: dict[str, dict[str, Any]] = {}
 
@@ -184,10 +191,12 @@ def get_openrouter_model(model_id: str) -> dict[str, Any] | None:
 def _map_openrouter_endpoint(raw: dict[str, Any]) -> dict[str, Any]:
     """Map one OpenRouter model endpoint into the Control Center contract."""
     pricing = raw.get("pricing") if isinstance(raw.get("pricing"), dict) else {}
+    raw_provider_name = str(raw.get("provider_name") or raw.get("name") or "").strip()
+    provider_name = OPENROUTER_PROVIDER_DISPLAY_NAMES.get(raw_provider_name.lower(), raw_provider_name)
     return {
-        "name": str(raw.get("name") or raw.get("provider_name") or "").strip(),
+        "name": str(raw.get("name") or "").strip() or provider_name,
         "slug": str(raw.get("tag") or raw.get("provider_name") or "").strip().lower(),
-        "providerName": str(raw.get("provider_name") or raw.get("name") or "").strip(),
+        "providerName": provider_name,
         "status": str(raw.get("status") or "unknown").strip().lower(),
         "pricing": pricing,
         "contextLength": _number_or_none(raw.get("context_length")),

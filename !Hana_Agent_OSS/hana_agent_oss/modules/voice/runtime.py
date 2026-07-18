@@ -46,6 +46,7 @@ from hana_agent_oss.modules.voice.tts_cartesia import CartesiaTTSProvider, DEFAU
 from hana_agent_oss.modules.voice.tts_azure import AzureTTSProvider
 from hana_agent_oss.modules.voice.tts_minimax import MinimaxTTSProvider
 from hana_agent_oss.modules.voice.tts_elevenlabs import ElevenlabsTTSProvider, DEFAULT_ELEVENLABS_VOICE, DEFAULT_ELEVENLABS_MODEL
+from hana_agent_oss.modules.voice.tts_fishaudio import FishAudioTTSProvider, DEFAULT_FISHAUDIO_MODEL
 from hana_agent_oss.modules.voice.tts_readable import sanitize_tts_text
 
 logger = logging.getLogger(__name__)
@@ -1083,23 +1084,26 @@ class VoiceRuntime:
             queries = grounding.get("queries", [])
             sources = grounding.get("sources", [])
             if queries or sources:
-                lines = ["🔍 GOOGLE NATIVE SEARCH GROUNDING"]
+                is_gemini_native = grounding.get("source") == "gemini_native"
+                title_line = "🔍 GOOGLE NATIVE SEARCH GROUNDING" if is_gemini_native else "🔍 PESQUISA WEB"
+                lines = [title_line]
                 if queries:
                     lines.append(f"Queries: {', '.join(f'\"{q}\"' for q in queries)}")
                 if sources:
-                    lines.append("\nFontes indexadas pelo Gemini:")
+                    lines.append(f"\nFontes indexadas{' pelo Gemini' if is_gemini_native else ''}:")
                     for s in sources:
                         title = s.get("title") or "Fonte"
                         uri = s.get("uri")
                         if uri:
                             lines.append(f"• {title}\n  {uri}")
-                
+
+                tool_name = "google_search" if is_gemini_native else "web_search"
                 self._event(
                     "tool_result",
-                    "google_search",
+                    tool_name,
                     "\n".join(lines),
                     status="success",
-                    tool_name="google_search",
+                    tool_name=tool_name,
                     metadata={"tts": False, "grounding": grounding}
                 )
 
@@ -1245,7 +1249,7 @@ class VoiceRuntime:
                 else None
             )
             self.tts_player.set_mirror(mirror_index, config.second_output_enabled)
-        if config.tts_provider not in {"edge", "gemini_tts", "google_cloud_tts", "cartesia", "azure", "minimax", "elevenlabs"}:
+        if config.tts_provider not in {"edge", "gemini_tts", "google_cloud_tts", "cartesia", "azure", "minimax", "elevenlabs", "fishaudio"}:
             self._event(
                 "error",
                 "tts",
@@ -1267,6 +1271,7 @@ class VoiceRuntime:
             "azure": "Azure Neural TTS",
             "minimax": "Minimax TTS",
             "elevenlabs": "Elevenlabs TTS",
+            "fishaudio": "Fish Audio TTS",
         }.get(config.tts_provider, "Edge TTS")
         self._event(
             "speaking",
@@ -1502,6 +1507,16 @@ class VoiceRuntime:
                 similarity_boost=config.tts_similarity,
                 style=config.tts_style,
                 speaker_boost=config.tts_speaker_boost,
+            )
+        if config.tts_provider == "fishaudio":
+            # Fish Audio TTS: tem tier free real (s2.1-pro-free, sem custo) e tiers
+            # pagos (s2.1-pro/s2-pro/s1) mais baratos que ElevenLabs. Bom pra testar
+            # sem gastar creditos do ElevenLabs. Requer FISH_API_KEY.
+            # Browse vozes/precos em https://fish.audio
+            return FishAudioTTSProvider(
+                voice=config.tts_voice or "",
+                model=config.tts_model or DEFAULT_FISHAUDIO_MODEL,
+                speed=config.tts_speed,
             )
         return self.tts_factory(
             voice=config.tts_voice,

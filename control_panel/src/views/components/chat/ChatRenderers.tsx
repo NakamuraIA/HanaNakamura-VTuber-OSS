@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Wrench, ChevronDown, BrainCircuit, Globe2 } from "lucide-react";
+import { Wrench, ChevronDown, BrainCircuit, Globe2, Loader2 } from "lucide-react";
 import { ChatMessage } from "../../../models/types";
 
 // Cards colapsáveis exibidos na bolha da Hana no chat. São puramente apresentacionais
@@ -291,6 +291,112 @@ export function AgentPlanRenderer({ plan, active = false }: AgentPlanRendererPro
           </div>
         </>
       )}
+    </div>
+  );
+}
+
+// Collapsible "Pensando..." card — DeepSeek-style reasoning display.
+// Shows the model's chain-of-thought in real time during streaming,
+// and collapses after completion with elapsed time.
+export function ThinkingRenderer({
+  content,
+  isThinking,
+  elapsedMs,
+}: {
+  content: string;
+  isThinking: boolean;
+  elapsedMs?: number;
+}) {
+  const [expanded, setExpanded] = useState(isThinking);
+
+  useEffect(() => {
+    if (isThinking) setExpanded(true);
+  }, [isThinking]);
+
+  if (!content && !isThinking) return null;
+
+  const elapsed = elapsedMs ? (elapsedMs / 1000).toFixed(0) : null;
+  const header = isThinking
+    ? "Pensando..."
+    : `Pensou por ${elapsed || "?"} segundos`;
+
+  return (
+    <div className="mb-3 rounded-xl border border-purple-400/20 bg-purple-500/5">
+      <button
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left"
+      >
+        <div className="flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.2em] text-purple-200">
+          {isThinking ? (
+            <Loader2 size={14} className="animate-spin text-purple-300" />
+          ) : (
+            <BrainCircuit size={14} />
+          )}
+          {header}
+        </div>
+        <ChevronDown
+          size={14}
+          className={`text-[var(--text-muted)] transition-transform ${expanded ? "rotate-180" : ""}`}
+        />
+      </button>
+      {expanded && (
+        <div className="px-3 pb-3 text-[11px] leading-relaxed text-[var(--text-muted)] whitespace-pre-wrap max-h-[300px] overflow-y-auto scrollbar-thin">
+          {content || (isThinking ? "..." : "")}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Live tool activity renderer — shows tools being executed in real time
+// with fade-in animation for each new event (DeepSeek-style).
+export function LiveToolActivityRenderer({
+  events,
+}: {
+  events: NonNullable<ChatMessage["toolActivity"]>;
+}) {
+  if (!events?.length) return null;
+
+  // Colapsa o par tool_call + tool_result numa linha só: o call some quando o
+  // result da mesma tool chega depois dele (senão o spinner gira pra sempre e a
+  // tool aparece duplicada no histórico).
+  const visible = events.filter(
+    (evt, i) =>
+      evt.kind !== "tool_call" ||
+      !events.some((e, j) => j > i && e.kind === "tool_result" && e.tool === evt.tool)
+  );
+
+  return (
+    <div className="mb-3 rounded-xl border border-amber-400/20 bg-amber-500/5 p-3">
+      <div className="flex items-center gap-2 mb-2 text-[10px] font-black uppercase tracking-[0.2em] text-amber-200">
+        <Wrench size={14} />
+        Ferramentas
+        <span className="font-mono text-[var(--text-muted)] normal-case tracking-normal">
+          {visible.length} {visible.length === 1 ? "chamada" : "chamadas"}
+        </span>
+      </div>
+      <div className="grid gap-1.5">
+        {visible.map((evt, i) => {
+          const isCall = evt.kind === "tool_call";
+          return (
+            <div
+              key={`${evt.tool}-${i}`}
+              className="flex items-center gap-2 text-[11px] animate-fade-in"
+            >
+              {isCall ? (
+                <Loader2 size={12} className="animate-spin text-amber-300" />
+              ) : (
+                <span className="h-2 w-2 rounded-full bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.6)]" />
+              )}
+              <span className="font-mono text-[var(--text-secondary)]">{evt.tool}</span>
+              <span className="text-[var(--text-muted)]">
+                {isCall ? "executando..." : "concluido"}
+              </span>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }

@@ -1,5 +1,14 @@
 ﻿# Hana Agent OSS Backend
 
+> ⚠️ **Aviso de estrutura:** existe uma pasta `hana_agent_oss/` dentro de
+> `!Hana_Agent_OSS/` — "Hana Agent" dentro de "Hana Agent". Isso foi um erro de
+> estruturação cometido na hora de montar o backend, sem motivo técnico por
+> trás. Hoje dá bastante trabalho desfazer com segurança (imports, paths,
+> scripts e configs todos dependem do layout atual), então ficou assim por
+> enquanto. O sistema funciona normalmente apesar disso — é só confuso de
+> navegar. Se alguém quiser achatar os dois níveis em um só, fico muito grata. 🙏
+> — Operador
+
 This folder is the active backend for Hana.
 
 It owns the Agent Core, FastAPI server, tool registry, capability manifests,
@@ -15,21 +24,21 @@ routing configuration, while Chat keeps an independent configuration.
 
 ```txt
 !Hana_Agent_OSS
-|- main.py
-|- contracts
-|- docs
+|- config
+|- models
 |- runtime
-|- hana_agent_oss
-|  |- api
-|  |  |- routers
-|  |  `- services
-|  |- channels
-|  |- core
-|  |- integrations
-|  |- modules
-|  |- plugins
-|  `- subbrains
-`- tests
+|- tests
+`- hana_agent_oss
+   |- docs
+   |- api
+   |  |- routers
+   |  `- services
+   |- channels
+   |- core
+   |- integrations
+   |- modules
+   |- plugins
+   `- subbrains
 ```
 
 ## Run

@@ -45,6 +45,14 @@ PROVIDER_ALIASES = {
     "deepseek": "deepseek",
     "deepseek_official": "deepseek",
     "deep_seek": "deepseek",
+    "qwen": "qwen",
+    "alibaba": "qwen",
+    "dashscope": "qwen",
+    "model_studio": "qwen",
+    "modelstudio": "qwen",
+    "maritaca": "maritaca",
+    "sabia": "maritaca",
+    "sabiá": "maritaca",
 }
 
 
@@ -120,7 +128,7 @@ def normalize_chat_config(config: dict[str, Any]) -> dict[str, Any]:
 
 
 STT_PROVIDER_IDS = {"groq_whisper", "gemini_audio", "google", "openai", "local"}
-TTS_PROVIDER_IDS = {"edge", "gemini_tts", "google_cloud_tts", "google", "azure", "cartesia", "minimax", "elevenlabs"}
+TTS_PROVIDER_IDS = {"edge", "gemini_tts", "google_cloud_tts", "google", "azure", "cartesia", "minimax", "elevenlabs", "fishaudio"}
 
 
 def normalize_stt_provider(provider: Any) -> str:
@@ -153,6 +161,9 @@ def normalize_tts_provider(provider: Any) -> str:
         "elevenlabs_tts": "elevenlabs",
         "eleven_labs": "elevenlabs",
         "elevenlabs": "elevenlabs",
+        "fish_audio": "fishaudio",
+        "fish": "fishaudio",
+        "fishaudio": "fishaudio",
     }
     value = aliases.get(value, value)
     return value if value in TTS_PROVIDER_IDS else "edge"
@@ -217,9 +228,17 @@ def _normalize_elevenlabs_controls(config: dict[str, Any], defaults: dict[str, A
 
 
 def normalize_connections_config(config: dict[str, Any]) -> dict[str, Any]:
-    """Normalize global feature toggles owned by the Connections tab."""
+    """Normalize global feature toggles owned by the Connections tab.
+
+    So mantem as chaves oficiais (DEFAULT_CONNECTIONS). Campos legado persistidos
+    por versoes antigas (vts/omni/grok*/minecraft*/discordSpeak...) sao descartados
+    aqui, entao somem do banco no proximo save em vez de ecoar pra sempre.
+    """
     normalized = dict(DEFAULT_CONNECTIONS)
-    normalized.update(config)
+    if isinstance(config, dict):
+        for key in DEFAULT_CONNECTIONS:
+            if key in config:
+                normalized[key] = config[key]
     for key in ("tts", "stt", "vad", "ptt", "stopHotkey", "discord", "localHands", "visao"):
         normalized[key] = bool(normalized.get(key))
     normalized["pttKey"] = str(normalized.get("pttKey") or DEFAULT_CONNECTIONS["pttKey"]).strip() or DEFAULT_CONNECTIONS["pttKey"]

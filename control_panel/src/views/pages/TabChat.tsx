@@ -34,7 +34,7 @@ import remarkGfm from "remark-gfm";
 import remarkBreaks from "remark-breaks";
 import { MediaRenderer } from "../components/chat/MediaRenderer";
 import { PermissionModal } from "../components/chat/PermissionModal";
-import { ToolRunsRenderer, MemoryContextRenderer, SearchSourcesRenderer, AgentPlanRenderer } from "../components/chat/ChatRenderers";
+import { ToolRunsRenderer, MemoryContextRenderer, SearchSourcesRenderer, AgentPlanRenderer, ThinkingRenderer, LiveToolActivityRenderer } from "../components/chat/ChatRenderers";
 import { CatalogPicker, CatalogPickerOption } from "../components/shared/CatalogPicker";
 import { Button } from "../components/shared/Button";
 import { DEFAULT_OPENROUTER_ROUTING, OpenRouterEndpointPicker } from "../components/shared/OpenRouterEndpointPicker";
@@ -43,6 +43,7 @@ const CHAT_SESSIONS_KEY = "hana_chat_sessions_v1";
 const CHAT_ACTIVE_SESSION_KEY = "hana_chat_active_session_v1";
 const CHAT_AUTO_TTS_KEY = "hana_chat_auto_tts_v1";
 const CHAT_TYPING_SPEED_KEY = "hana_chat_typing_speed_v1";
+const CHAT_SHOW_TYPING_SPEED_KEY = "hana_chat_show_typing_speed_v1";
 type TypingSpeed = "slow" | "normal" | "fast" | "instant";
 const TYPING_SPEED_MS: Record<TypingSpeed, number> = { slow: 24, normal: 16, fast: 12, instant: 0 };
 const TYPING_SPEED_CHARS: Record<TypingSpeed, number> = { slow: 2, normal: 5, fast: 14, instant: Number.POSITIVE_INFINITY };
@@ -326,7 +327,9 @@ export function TabChat({ isActive }: TabChatProps) {
   const [autoTtsEnabled, setAutoTtsEnabled] = useState(() => localStorage.getItem(CHAT_AUTO_TTS_KEY) === "true");
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const [liveActivity, setLiveActivity] = useState({ label: "", detail: "" });
-  const streamerMode = true;
+  const [reasoningText, setReasoningText] = useState("");
+  const [liveToolActivity, setLiveToolActivity] = useState<NonNullable<ChatMessage["toolActivity"]>>([]);
+  const [showTypingSpeed, setShowTypingSpeed] = useState(() => localStorage.getItem(CHAT_SHOW_TYPING_SPEED_KEY) !== "false");
   const [typingSpeed, setTypingSpeed] = useState<TypingSpeed>(() => {
     const stored = localStorage.getItem(CHAT_TYPING_SPEED_KEY) as TypingSpeed | null;
     return stored && stored in TYPING_SPEED_MS ? stored : "normal";
@@ -344,6 +347,9 @@ export function TabChat({ isActive }: TabChatProps) {
   const wsRef = useRef<WebSocket | null>(null);
   const currentResponseRef = useRef("");
   const currentMetaRef = useRef<ChatMessage["meta"] | null>(null);
+  const reasoningAccumulatorRef = useRef("");
+  const reasoningStartTimeRef = useRef<number>(0);
+  const toolActivityAccumulatorRef = useRef<ChatMessage["toolActivity"]>([]);
   const userScrolledUpRef = useRef(false);
   const manualScrollRef = useRef(false);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -485,6 +491,10 @@ export function TabChat({ isActive }: TabChatProps) {
     autoTtsEnabledRef.current = autoTtsEnabled;
     localStorage.setItem(CHAT_AUTO_TTS_KEY, String(autoTtsEnabled));
   }, [autoTtsEnabled]);
+
+  useEffect(() => {
+    localStorage.setItem(CHAT_SHOW_TYPING_SPEED_KEY, String(showTypingSpeed));
+  }, [showTypingSpeed]);
 
   useEffect(() => {
     typingSpeedMsRef.current = TYPING_SPEED_MS[typingSpeed];
@@ -1046,6 +1056,11 @@ export function TabChat({ isActive }: TabChatProps) {
     setLiveActivity({ label: "Hana recebeu a mensagem", detail: "Preparando contexto e escolhendo o próximo passo." });
     currentResponseRef.current = "";
     currentMetaRef.current = null;
+    reasoningAccumulatorRef.current = "";
+    reasoningStartTimeRef.current = 0;
+    toolActivityAccumulatorRef.current = [];
+    setReasoningText("");
+    setLiveToolActivity([]);
     forceScrollToBottom();
 
     // Modo Streamer (SSE) com digitação letra-por-letra
@@ -1176,13 +1191,30 @@ export function TabChat({ isActive }: TabChatProps) {
             setLiveActivity({ label: "", detail: "" });
             const finalId = `hana-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
             const finalText = typingBufferRef.current.trim();
+            const reasoningElapsedMs = reasoningStartTimeRef.current ? Date.now() - reasoningStartTimeRef.current : 0;
+
             setMessages(prev => {
               const last = prev[prev.length - 1];
               if (last && last.id === "streaming-res") {
-                return [...prev.slice(0, -1), { ...last, id: finalId }];
+                return [...prev.slice(0, -1), {
+                  ...last,
+                  id: finalId,
+                  reasoning: reasoningAccumulatorRef.current ? {
+                    content: reasoningAccumulatorRef.current,
+                    elapsedMs: reasoningElapsedMs,
+                  } : undefined,
+                }];
               }
               return prev;
             });
+
+            // Clean up accumulators
+            reasoningAccumulatorRef.current = "";
+            reasoningStartTimeRef.current = 0;
+            toolActivityAccumulatorRef.current = [];
+            setReasoningText("");
+            setLiveToolActivity([]);
+
             if (autoTtsEnabledRef.current && finalText) {
               window.setTimeout(() => void generateMessageSpeech(finalId, finalText), 0);
             }
@@ -1198,9 +1230,81 @@ export function TabChat({ isActive }: TabChatProps) {
           setMessages(prev => [...prev, {
             id: `err-${Date.now()}`,
             role: "system",
-            content: "Erro na conexÃ£o com o servidor da Hana.",
+            content: "Erro na conexão com o servidor da Hana.",
             timestamp: nowTime()
           }]);
+        },
+        // onReasoning: thinking indicator while model reasons — accumulates full text for display
+        (activity) => {
+          if (!reasoningStartTimeRef.current) {
+            reasoningStartTimeRef.current = Date.now();
+          }
+          reasoningAccumulatorRef.current += activity?.detail || "";
+          setReasoningText(reasoningAccumulatorRef.current);
+
+          setLiveActivity({
+            label: activity?.label || "Hana está pensando...",
+            detail: activity?.detail ? activity.detail.slice(-80) : "Analisando a pergunta.",
+          });
+        },
+        // onToolActivity: per-tool execution feedback — accumulates events for live display
+        (event: { kind?: string; tool?: string; args?: Record<string, unknown>; result?: Record<string, unknown> }) => {
+          const toolName = event?.tool || event?.kind || "tool";
+          const isToolCall = event?.kind === "tool_call";
+          const isToolResult = event?.kind === "tool_result";
+          const ok = isToolResult ? ((event?.result as Record<string, unknown>)?.ok !== false) : undefined;
+          const status = isToolCall ? "running" : (ok ? "success" : "failed");
+
+          const toolEvent = {
+            kind: (event?.kind || "tool_call") as "tool_call" | "tool_result",
+            tool: toolName,
+            args: event?.args,
+            result: event?.result,
+            timestamp: Date.now(),
+          };
+          toolActivityAccumulatorRef.current = [...(toolActivityAccumulatorRef.current || []), toolEvent];
+          setLiveToolActivity([...toolActivityAccumulatorRef.current]);
+
+          const label = isToolCall
+            ? `Chamando ${toolName}...`
+            : isToolResult
+              ? (ok ? `${toolName} concluida` : `Erro em ${toolName}`)
+              : `${toolName}`;
+          const resultPreview = isToolResult
+            ? JSON.stringify(event?.result).slice(0, 200)
+            : (event?.args ? JSON.stringify(event?.args).slice(0, 150) : "");
+
+          setLiveActivity({ label, detail: resultPreview });
+
+          const step = {
+            tool: toolName,
+            status,
+            risk: "low",
+            summary: resultPreview,
+          };
+
+          setMessages(prev => {
+            const last = prev[prev.length - 1];
+            if (last && last.role === "hana" && last.id === "streaming-res") {
+              return [...prev.slice(0, -1), {
+                ...last,
+                toolActivity: [...(last.toolActivity || []), toolEvent],
+                agentPlan: {
+                  intent: last.agentPlan?.intent || "tool_action",
+                  steps: [...(last.agentPlan?.steps || []), step],
+                },
+              }];
+            }
+            return [...prev, {
+              id: "streaming-res",
+              role: "hana" as const,
+              content: "",
+              timestamp: nowTime(),
+              meta: currentMetaRef.current || undefined,
+              toolActivity: [toolEvent],
+              agentPlan: { intent: "tool_action", steps: [step] },
+            }];
+          });
         }
       );
 
@@ -1483,7 +1587,7 @@ export function TabChat({ isActive }: TabChatProps) {
                   TTS {autoTtsEnabled ? "on" : "off"}
                 </button>
 
-                {streamerMode && (
+                {showTypingSpeed && (
                   <button
                     type="button"
                     onClick={() => setTypingSpeed((prev) => TYPING_SPEED_ORDER[(TYPING_SPEED_ORDER.indexOf(prev) + 1) % TYPING_SPEED_ORDER.length])}
@@ -1494,6 +1598,20 @@ export function TabChat({ isActive }: TabChatProps) {
                     {TYPING_SPEED_LABEL[typingSpeed]}
                   </button>
                 )}
+
+                <button
+                  type="button"
+                  onClick={() => setShowTypingSpeed((value) => !value)}
+                  className={`flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11px] font-black uppercase tracking-wider transition-colors ${
+                    showTypingSpeed
+                      ? "border-cyan-300/30 bg-cyan-500/15 text-cyan-200"
+                      : "border-white/10 bg-white/5 text-[var(--text-muted)] hover:text-white"
+                  }`}
+                  title="Mostrar ou esconder o botao de velocidade de digitacao no chat"
+                >
+                  <Terminal size={14} />
+                  Botao velocidade {showTypingSpeed ? "on" : "off"}
+                </button>
               </div>
             </div>
 
@@ -1630,6 +1748,27 @@ export function TabChat({ isActive }: TabChatProps) {
                     </div>
                   )}
                   
+                  {/* DeepSeek-style thinking display */}
+                  {msg.reasoning?.content ? (
+                    <ThinkingRenderer
+                      content={msg.reasoning.content}
+                      isThinking={false}
+                      elapsedMs={msg.reasoning.elapsedMs}
+                    />
+                  ) : msg.id === "streaming-res" && reasoningText ? (
+                    <ThinkingRenderer
+                      content={reasoningText}
+                      isThinking={true}
+                    />
+                  ) : null}
+
+                  {/* Live tool activity display */}
+                  {msg.toolActivity && msg.toolActivity.length > 0 ? (
+                    <LiveToolActivityRenderer events={msg.toolActivity} />
+                  ) : msg.id === "streaming-res" && liveToolActivity && liveToolActivity.length > 0 ? (
+                    <LiveToolActivityRenderer events={liveToolActivity} />
+                  ) : null}
+
                   {planHasRealSteps(msg.agentPlan) && msg.agentPlan && <AgentPlanRenderer plan={msg.agentPlan} active={msg.id === "streaming-res" && isTyping} />}
 
                   {msg.meta?.memoryContext?.memories?.length ? (

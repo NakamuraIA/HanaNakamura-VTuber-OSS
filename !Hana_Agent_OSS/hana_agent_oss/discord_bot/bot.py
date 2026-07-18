@@ -52,7 +52,7 @@ class HanaBot(commands.Bot):
 
     async def setup_hook(self) -> None:
         """Carrega cogs e sincroniza os slash commands globalmente (user-install)."""
-        for cog in ("geral", "hana", "voz"):
+        for cog in ("geral", "hana", "voz", "config"):
             try:
                 await self.load_extension(f"hana_agent_oss.discord_bot.cogs.{cog}")
                 logger.info("Cog '%s' carregado.", cog)

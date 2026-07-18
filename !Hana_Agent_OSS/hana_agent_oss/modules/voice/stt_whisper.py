@@ -340,24 +340,6 @@ class GroqWhisperSTTProvider:
             prompt=prompt,
         )
 
-    def transcribe_path(
-        self,
-        path: str | Path,
-        *,
-        model: str | None = None,
-        language: str | None = None,
-        prompt: str | None = None,
-    ) -> STTTranscriptionResult:
-        audio_path = Path(path)
-        with audio_path.open("rb") as audio_file:
-            return self._transcribe_file_object(
-                audio_file,
-                filename=audio_path.name,
-                model=model,
-                language=language,
-                prompt=prompt,
-            )
-
     def _transcribe_file_object(
         self,
         audio_file: BinaryIO,
@@ -402,6 +384,3 @@ class GroqWhisperSTTProvider:
         if len(normalized) < 3 and normalized not in VALID_SHORT_UTTERANCES:
             return True
         return is_prompt_echo(text, prompt)
-
-
-MotorSTTWhisper = GroqWhisperSTTProvider

@@ -49,16 +49,20 @@ class HanaBackendClient:
             return response.content
 
     async def synthesize_speech(self, text: str) -> bytes | None:
-        """Pede o áudio TTS da resposta da Hana (usa o perfil de TTS do Chat persistido).
+        """Pede o áudio TTS da resposta da Hana usando o perfil de "TTS do Chat".
 
         Devolve os bytes do áudio (mp3/wav) ou None se vier vazio. Usado pela voz do
-        Discord pra tocar a fala dela na call.
+        Discord pra tocar a fala dela. useChatTts=True faz o backend usar a voz do
+        Chat do Controle (llm_config), nao a do Terminal Agente.
         """
         clean = str(text or "").strip()
         if not clean:
             return None
         async with httpx.AsyncClient(timeout=120.0) as client:
-            response = await client.post(f"{self.backend_url}/api/voice/tts/synthesize", json={"text": clean})
+            response = await client.post(
+                f"{self.backend_url}/api/voice/tts/synthesize",
+                json={"text": clean, "useChatTts": True},
+            )
             response.raise_for_status()
             data = response.json()
         b64 = data.get("audioBase64")
@@ -75,5 +79,58 @@ class HanaBackendClient:
         """Tell the backend which outbox entries were delivered, so they don't repeat."""
         async with httpx.AsyncClient(timeout=15.0) as client:
             response = await client.post(f"{self.backend_url}/api/discord/outbox/delivered", json={"ids": ids})
+            response.raise_for_status()
+            return response.json()
+
+    # --- Config (usado pelo /provider e /status) --------------------------- #
+    # Todos os POST de config no backend fazem merge/PATCH: mandar so os campos
+    # que mudam. Config aplica na hora (todo turno le memory.get_setting fresco).
+
+    async def get_catalog(self) -> dict[str, Any]:
+        """Fetch the model catalog (llmProviders, models, imageProviders, imageModels)."""
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            response = await client.get(f"{self.backend_url}/api/catalog")
+            response.raise_for_status()
+            return response.json()
+
+    async def get_chat_config(self) -> dict[str, Any]:
+        """Read the chat config (provider/model usados pelo turno do Discord)."""
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            response = await client.get(f"{self.backend_url}/api/config/chat")
+            response.raise_for_status()
+            return response.json()
+
+    async def update_chat_config(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Merge-patch the chat config (ex: {'provider','model'})."""
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            response = await client.post(f"{self.backend_url}/api/config/chat", json=payload)
+            response.raise_for_status()
+            return response.json()
+
+    async def get_llm_config(self) -> dict[str, Any]:
+        """Read the full LLM config (llmProvider/Model, agentProvider/Model, visionModel...)."""
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            response = await client.get(f"{self.backend_url}/api/config/llm")
+            response.raise_for_status()
+            return response.json()
+
+    async def update_llm_config(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Merge-patch the LLM config (ex: {'agentProvider','agentModel'})."""
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            response = await client.post(f"{self.backend_url}/api/config/llm", json=payload)
+            response.raise_for_status()
+            return response.json()
+
+    async def get_image_config(self) -> dict[str, Any]:
+        """Read the image-generation config (imageProvider, openrouterImageModel)."""
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            response = await client.get(f"{self.backend_url}/api/config/image")
+            response.raise_for_status()
+            return response.json()
+
+    async def update_image_config(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Merge-patch the image config (ex: {'imageProvider','openrouterImageModel'})."""
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            response = await client.post(f"{self.backend_url}/api/config/image", json=payload)
             response.raise_for_status()
             return response.json()

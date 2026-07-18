@@ -17,6 +17,7 @@ from hana_agent_oss.api.services.catalog import DEFAULT_LLM_CONFIG
 from hana_agent_oss.api.services.catalog import DEFAULT_VOICE_CONFIG
 from hana_agent_oss.api.services.chat import run_text_turn
 from hana_agent_oss.api.services.terminal_agent import append_terminal_event
+from hana_agent_oss.api.services.unified_history import build_unified_history
 from hana_agent_oss.modules.voice.audio_control import request_global_stop
 from hana_agent_oss.modules.voice.runtime import VoiceRuntime, voice_config_with_connections
 from hana_agent_oss.modules.voice.speech_state import set_speaking
@@ -35,6 +36,7 @@ from hana_agent_oss.modules.voice.tts_elevenlabs import (
     DEFAULT_ELEVENLABS_VOICE,
     ElevenlabsTTSProvider,
 )
+from hana_agent_oss.modules.voice.tts_fishaudio import DEFAULT_FISHAUDIO_MODEL, FishAudioTTSProvider
 from hana_agent_oss.modules.voice.tts_readable import sanitize_tts_text
 
 logger = logging.getLogger(__name__)
@@ -134,6 +136,16 @@ def build_elevenlabs_tts_provider(
     )
 
 
+def build_fishaudio_tts_provider(*, voice: str = "", model: str = "", speed: Any = 1.0, latency: str = "balanced") -> FishAudioTTSProvider:
+    """Build Fish Audio TTS (free tier s2.1-pro-free + paid tiers; voice via reference_id)."""
+    return FishAudioTTSProvider(
+        voice=str(voice or "").strip(),
+        model=str(model or DEFAULT_FISHAUDIO_MODEL).strip(),
+        speed=_float_or_default(speed, 1.0),
+        latency=str(latency or "balanced").strip(),
+    )
+
+
 def build_minimax_tts_provider(*, voice: str, model: str = "", speed: Any = 1.0) -> MinimaxTTSProvider:
     """Build Minimax T2A TTS (good pt-BR support, many female voices, turbo for low latency)."""
     return MinimaxTTSProvider(
@@ -214,7 +226,10 @@ def _voice_llm_payload(request: Request, fields: dict[str, str], text: str) -> d
         "native_search_mode": "off" if provider != "gemini_api" else (fields.get("nativeSearchMode") or fields.get("native_search_mode") or "auto"),
         "safety_mode": fields.get("safetyMode") or fields.get("safety_mode") or agent_settings.get("safety_mode") or "safe",
         "channel": "terminal_agent",
-        "history": [],
+        # BUG antigo: era [] fixo — mensagem digitada rodava SEM histórico nenhum
+        # (o meter mostrava "historico 0.0k" e a Hana esquecia a conversa ao digitar).
+        # A voz PTT sempre montou o unificado; agora o texto manual também.
+        "history": build_unified_history(request.app.state.memory, channel="terminal_agent"),
         "openrouter_routing": (
             config.get("openrouterRoutingByModel", {}).get(str(fields.get("llmModel") or fields.get("llm_model") or config.get("llmModel") or ""), {})
             if provider == "openrouter" and isinstance(config.get("openrouterRoutingByModel"), dict)
@@ -245,26 +260,29 @@ async def _run_voice_text_response(request: Request, fields: dict[str, str], tex
         queries = grounding.get("queries", [])
         sources = grounding.get("sources", [])
         if queries or sources:
-            lines = ["🔍 GOOGLE NATIVE SEARCH GROUNDING"]
+            is_gemini_native = grounding.get("source") == "gemini_native"
+            title_line = "🔍 GOOGLE NATIVE SEARCH GROUNDING" if is_gemini_native else "🔍 PESQUISA WEB"
+            lines = [title_line]
             if queries:
                 lines.append(f"Queries: {', '.join(f'\"{q}\"' for q in queries)}")
             if sources:
-                lines.append("\nFontes indexadas pelo Gemini:")
+                lines.append(f"\nFontes indexadas{' pelo Gemini' if is_gemini_native else ''}:")
                 for s in sources:
                     title = s.get("title") or "Fonte"
                     uri = s.get("uri")
                     if uri:
                         lines.append(f"• {title}\n  {uri}")
-            
+
+            tool_name = "google_search" if is_gemini_native else "web_search"
             append_terminal_event(
                 request.app.state.memory,
                 {
                     "kind": "tool_result",
-                    "source": "google_search",
+                    "source": tool_name,
                     "displayText": "\n".join(lines),
                     "speechText": "",
                     "status": "success",
-                    "toolName": "google_search",
+                    "toolName": tool_name,
                     "metadata": {"tts": False, "grounding": grounding},
                 },
             )
@@ -307,6 +325,28 @@ def _voice_config(request: Request) -> dict[str, Any]:
         config = dict(DEFAULT_VOICE_CONFIG)
     merged = dict(DEFAULT_VOICE_CONFIG)
     merged.update(config)
+    return merged
+
+
+def _chat_tts_config(request: Request) -> dict[str, Any]:
+    """Read the 'TTS do Chat' profile (llm_config) as a voice-config-shaped dict.
+
+    O Discord toca a fala pela mesma voz do Chat do Controle, nao pela do Terminal
+    Agente. O llm_config guarda os mesmos campos ttsProvider/ttsVoice/ttsModel/etc,
+    entao ele encaixa direto onde o endpoint espera um voice_config.
+    """
+    llm = request.app.state.memory.get_setting("llm_config", {})
+    if not isinstance(llm, dict):
+        return dict(DEFAULT_VOICE_CONFIG)
+    merged = dict(DEFAULT_VOICE_CONFIG)
+    # So os campos de TTS interessam aqui; o resto do llm_config e ignorado.
+    for key in (
+        "ttsProvider", "ttsVoice", "ttsModel", "ttsLanguage", "ttsPrompt",
+        "ttsSpeed", "ttsPitch", "ttsStreaming", "ttsStability", "ttsSimilarity",
+        "ttsStyle", "ttsSpeakerBoost", "ttsLatency",
+    ):
+        if key in llm:
+            merged[key] = llm[key]
     return merged
 def _clean_filename(filename: str | None) -> str:
     value = str(filename or DEFAULT_AUDIO_FILENAME).replace("\\", "/").split("/")[-1].strip()
@@ -495,9 +535,11 @@ async def respond_to_voice_text(request: Request, payload: dict[str, Any]) -> di
 
 @router.post("/tts/synthesize")
 async def synthesize_voice_tts(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
-    config = _voice_config(request)
+    # useChatTts=True (usado pelo Discord) le a voz da "TTS do Chat" (llm_config)
+    # em vez da voz do Terminal Agente (voice_config).
+    config = _chat_tts_config(request) if payload.get("useChatTts") else _voice_config(request)
     provider_id = str(payload.get("provider") or config.get("ttsProvider") or "edge").strip().lower()
-    if provider_id not in {"edge", "gemini_tts", "google_cloud_tts", "google", "cartesia", "azure", "minimax", "elevenlabs"}:
+    if provider_id not in {"edge", "gemini_tts", "google_cloud_tts", "google", "cartesia", "azure", "minimax", "elevenlabs", "fishaudio"}:
         raise HTTPException(status_code=400, detail=f"Unsupported TTS provider: {provider_id}.")
     if provider_id == "google":
         provider_id = "google_cloud_tts"
@@ -527,6 +569,8 @@ async def synthesize_voice_tts(request: Request, payload: dict[str, Any]) -> dic
         default_model = "speech-2.8-turbo"
     elif provider_id == "elevenlabs":
         default_model = DEFAULT_ELEVENLABS_MODEL
+    elif provider_id == "fishaudio":
+        default_model = DEFAULT_FISHAUDIO_MODEL
     else:
         default_model = ""
     model = str(payload.get("model") or config.get("ttsModel") or default_model).strip()
@@ -581,6 +625,13 @@ async def synthesize_voice_tts(request: Request, payload: dict[str, Any]) -> dic
                 similarity=payload.get("similarity", config.get("ttsSimilarity", 0.75)),
                 style=payload.get("style", config.get("ttsStyle", 0.0)),
                 speaker_boost=payload.get("speakerBoost", config.get("ttsSpeakerBoost", True)),
+            ).synthesize(text)
+        elif provider_id == "fishaudio":
+            result = await build_fishaudio_tts_provider(
+                voice=voice,
+                model=model,
+                speed=speed,
+                latency=str(payload.get("latency") or config.get("ttsLatency") or "balanced"),
             ).synthesize(text)
         else:
             result = await build_edge_tts_provider(voice=voice, speed=speed, pitch=pitch).synthesize(text)

@@ -56,7 +56,7 @@ async def _attachment_to_payload(attachment: discord.Attachment) -> dict[str, An
 class SpeakResponseView(discord.ui.View):
     """Botão '🔊 Gerar áudio' embaixo da resposta da Hana.
 
-    Gera o TTS DAQUELA resposta sob demanda e devolve o arquivo. Só o dono pode
+    Gera o TTS DAQUELA resposta sob demanda e devolve o arquivo. Só a dona pode
     clicar. O texto fica guardado na própria view (não passa de novo pela IA).
     """
 
@@ -68,7 +68,7 @@ class SpeakResponseView(discord.ui.View):
     @discord.ui.button(label="Gerar áudio", emoji="🔊", style=discord.ButtonStyle.secondary)
     async def gerar_audio(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not is_owner(interaction.user.id):
-            await interaction.response.send_message("🔒 Só o dono pode gerar o áudio.", ephemeral=True)
+            await interaction.response.send_message("🔒 Só a dona pode gerar o áudio.", ephemeral=True)
             return
         await interaction.response.defer(thinking=True)
         try:
@@ -166,7 +166,7 @@ class HanaCog(commands.Cog):
 
     async def _maybe_speak(self, guild: Any, text: str) -> None:
         """Fala a resposta na call quando a Hana está conectada (cog de voz)."""
-        voz = self.bot.get_cog("Voz")
+        voz = self.bot.get_cog("VozCog")
         if voz is None:
             return
         try:

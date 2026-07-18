@@ -18,7 +18,7 @@ from hana_agent_oss.memory.memory_xml import extract_memory_saves, strip_memory_
 from hana_agent_oss.tools.skill_tools import apply_skill_notes, strip_skill_xml_tags
 from hana_agent_oss.providers import ProviderRequest, ProviderSelector
 from hana_agent_oss.providers.provider_selector.openrouter.provider import OpenRouterProvider
-from hana_agent_oss.api.services.catalog import DEFAULT_CONNECTIONS, model_supports_vision
+from hana_agent_oss.api.services.catalog import DEFAULT_CONNECTIONS, model_supports_vision, resolve_vision_target
 from hana_agent_oss.api.services.unified_history import build_memory_context_block, estimate_tokens, strip_leaked_terminal_events
 
 
@@ -310,7 +310,28 @@ def resolve_chat_attachments(payload: dict[str, Any], *, memory: MemoryStore, te
 
 # Providers OpenAI-compativeis que sobem tokens via generate_stream (streaming real).
 # Gemini fica de fora (entrega o texto inteiro de uma vez).
-STREAMING_PROVIDERS = frozenset({"openrouter", "groq", "deepseek"})
+STREAMING_PROVIDERS = frozenset({"openrouter", "groq", "deepseek", "qwen", "maritaca"})
+
+
+def _trim_repeated_answer(text: str) -> str:
+    """Cut a whole-answer restatement some cheap/quantized models append after
+    finishing (observed across deepseek-v4-flash, sabiazinho-4, qwen3.5-flash —
+    not provider-specific). Since max_tokens was raised to a real cap, these
+    models sometimes keep generating and restate the same answer almost
+    verbatim instead of stopping. Find the largest early chunk that reappears
+    later in the text and cut everything from there.
+    """
+    stripped = text.strip()
+    length = len(stripped)
+    if length < 80:
+        return text
+    max_probe = min(length // 2, 600)
+    for probe_len in range(max_probe, 49, -10):
+        prefix = stripped[:probe_len]
+        second = stripped.find(prefix, probe_len)
+        if second != -1:
+            return stripped[:second].rstrip()
+    return text
 
 
 async def handle_chat_payload(websocket: WebSocket, payload: dict[str, Any], *, core: HanaAgentCore, memory: MemoryStore) -> None:
@@ -328,8 +349,14 @@ async def handle_chat_payload(websocket: WebSocket, payload: dict[str, Any], *, 
     async def on_delta(token: str) -> None:
         await websocket.send_json({"type": "chunk", "content": token})
 
+    async def on_reasoning(token: str) -> None:
+        await websocket.send_json({"type": "reasoning", "content": token})
+
     async def on_activity(activity: dict[str, Any]) -> None:
         await websocket.send_json({"type": "activity", "activity": activity})
+
+    async def on_tool_activity(event: dict[str, Any]) -> None:
+        await websocket.send_json({"type": "tool_activity", "event": event})
 
     if use_stream:
         await on_activity({"event": "model_started", "label": "Consultando o modelo", "detail": "Aguardando os primeiros tokens."})
@@ -340,6 +367,8 @@ async def handle_chat_payload(websocket: WebSocket, payload: dict[str, Any], *, 
         memory=memory,
         on_delta=on_delta if use_stream else None,
         on_activity=on_activity if use_stream else None,
+        on_reasoning=on_reasoning if use_stream else None,
+        on_tool_activity=on_tool_activity if use_stream else None,
     )
 
     await websocket.send_json({"type": "meta", "meta": result["meta"]})
@@ -369,6 +398,8 @@ async def run_text_turn(
     memory: MemoryStore,
     on_delta: Callable[[str], Awaitable[None]] | None = None,
     on_activity: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
+    on_reasoning: Callable[[str], Awaitable[None]] | None = None,
+    on_tool_activity: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
 ) -> dict[str, Any]:
     """Run one text turn through the selected provider or deterministic Agent Core.
 
@@ -409,7 +440,11 @@ async def run_text_turn(
         text = text[:12000] + "\n\n[... texto muito longo truncado para o contexto do modelo. O texto completo foi salvo na memória se precisar lembrar.]"
 
     connections = memory.get_setting("connections_config", dict(DEFAULT_CONNECTIONS))
-    if connections.get("visao") and not should_use_agent_core(text, provider):
+    # "Visao sob demanda" so vale pro Terminal Agente/voz (ela olha a tela sozinha
+    # quando falamos com ela por la). No Chat do Controle a visao e SOMENTE por
+    # anexo manual (colar/arrastar imagem) — nunca captura a tela sem o usuario mandar.
+    is_terminal_or_voice_channel = channel in {"voice", "terminal_agent", "terminal"}
+    if connections.get("visao") and is_terminal_or_voice_channel and not should_use_agent_core(text, provider):
         # Only attach screen capture if the selected model actually supports vision.
         # This prevents "openrouter_model_does_not_support_vision" errors when the user
         # picks a text-only model on OpenRouter while testing different models.
@@ -421,7 +456,7 @@ async def run_text_turn(
                 from hana_agent_oss.modules.vision.periodic_vision import VisaoNyra
                 from hana_agent_oss.api.services.terminal_agent import append_terminal_event
                 visao = VisaoNyra(memory=memory)
-                res = visao.capturar()
+                res = await asyncio.to_thread(visao.capturar)
                 if res.get("sucesso") and res.get("b64"):
                     mime_type = str(res.get("mime_type") or "image/png")
                     extension = str(res.get("extension") or ".png")
@@ -547,6 +582,27 @@ async def run_text_turn(
             memory_block, injected_memories = build_memory_context_block(memory, query=text)
             if memory_block:
                 chat_messages.insert(0, {"role": "system", "content": memory_block})
+                # Log memory injection to Terminal Agent so the user can SEE
+                # which facts were pulled into context this turn (RAG transparency).
+                mem_tokens = estimate_tokens(
+                    "\n".join(str(m.get("text") or "") for m in injected_memories)
+                )
+                from hana_agent_oss.api.services.terminal_agent import append_terminal_event
+                append_terminal_event(
+                    memory,
+                    {
+                        "kind": "system",
+                        "source": "memory",
+                        "displayText": (
+                            f"[MEMORIA] {len(injected_memories)} fatos relevantes "
+                            f"injetados no contexto"
+                            + (f" (~{mem_tokens} tokens)" if mem_tokens else "")
+                        ),
+                        "speechText": "",
+                        "status": "info",
+                        "metadata": {"tts": False},
+                    },
+                )
         except Exception:
             # Anti-amnésia: se o bloco de memória falhar, a Hana responde "cega" do
             # passado dela. Não quebra o turno, mas tem que ficar gravado o motivo.
@@ -589,12 +645,57 @@ async def run_text_turn(
         except Exception:
             logger.debug("Falha ao medir o contexto do turno", exc_info=True)
             context_report = {}
-        # Groq "thinker" switch (GUI toggle): honored from the payload first, else the
-        # persisted llm_config. Voice/terminal still auto-disable thinking regardless.
+        # "Pensar antes de falar" switch (GUI toggle): Groq and Qwen each have their own
+        # persisted key. Honored from the payload first, else the persisted llm_config.
+        # Voice/terminal still auto-throttle thinking regardless (see _apply_thinking_control).
         _llm_cfg = memory.get_setting("llm_config", {})
-        groq_thinking = payload.get("groqThinking")
-        if groq_thinking is None:
-            groq_thinking = _llm_cfg.get("groqThinking", True) if isinstance(_llm_cfg, dict) else True
+        # Roteamento de visao: chegou imagem (anexo manual do chat/Discord) mas o
+        # provider/modelo do chat nao ve? Manda ESTE turno pro provider de visao
+        # configurado (reaproveita o visionModel) em vez da imagem se perder num
+        # modelo so-texto. Terminal/voz nao caem aqui: a captura de tela ja e
+        # gateada por model_supports_vision, entao nem anexa imagem se nao ve.
+        _has_image = any(
+            isinstance(a, dict) and str(a.get("type") or "").lower().startswith("image/")
+            for a in resolved_attachments
+        )
+        if _has_image and not model_supports_vision(provider, model, memory):
+            _vp, _vm = resolve_vision_target(_llm_cfg if isinstance(_llm_cfg, dict) else {}, memory)
+            if _vm and (_vp, _vm) != (provider, model) and model_supports_vision(_vp, _vm, memory):
+                try:
+                    from hana_agent_oss.api.services.terminal_agent import append_terminal_event
+                    append_terminal_event(memory, {
+                        "kind": "system",
+                        "source": "vision",
+                        "displayText": f"🖼️ Imagem recebida — {provider}/{model} não vê. Roteei pra visão: {_vp}/{_vm}.",
+                        "status": "info",
+                        "metadata": {"tts": False},
+                    })
+                except Exception:
+                    logger.debug("Falha ao registrar roteamento de visão", exc_info=True)
+                provider, model = _vp, _vm
+        _thinking_key = {
+            "groq": "groqThinking",
+            "qwen": "qwenThinking",
+            "openrouter": "openrouterThinking",
+        }.get(provider)
+        turn_thinking = payload.get(_thinking_key) if _thinking_key else None
+        if turn_thinking is None:
+            turn_thinking = _llm_cfg.get(_thinking_key, True) if (_thinking_key and isinstance(_llm_cfg, dict)) else True
+        # OpenRouter/DeepSeek sliders (explicit level): overrides the on/off heuristic
+        # above when the user picked an exact effort tier instead of Auto.
+        _effort_key = {"openrouter": "openrouterReasoningEffort", "deepseek": "deepseekReasoningEffort"}.get(provider)
+        turn_reasoning_effort = payload.get(_effort_key) if _effort_key else None
+        if turn_reasoning_effort is None and _effort_key and isinstance(_llm_cfg, dict):
+            turn_reasoning_effort = _llm_cfg.get(_effort_key)
+        # Modelo de Agente: controle de "pensar" PROPRIO (loop de ferramentas). Um par
+        # unico serve pra qualquer provider do agente — a UI mostra toggle (groq/qwen)
+        # ou slider (deepseek/openrouter) conforme o agentProvider escolhido.
+        _agent_thinking = payload.get("agentThinking")
+        if _agent_thinking is None and isinstance(_llm_cfg, dict):
+            _agent_thinking = _llm_cfg.get("agentThinking", True)
+        _agent_effort = payload.get("agentReasoningEffort")
+        if _agent_effort is None and isinstance(_llm_cfg, dict):
+            _agent_effort = _llm_cfg.get("agentReasoningEffort")
         llm_request = ProviderRequest(
             provider=provider,
             model=model,
@@ -608,7 +709,12 @@ async def run_text_turn(
             memory=memory,
             openrouter_routing=dict(payload.get("openrouter_routing") or {}) if provider == "openrouter" else {},
             on_activity=on_activity,
-            thinking=bool(groq_thinking),
+            on_reasoning=on_reasoning,
+            on_tool_activity=on_tool_activity,
+            thinking=bool(turn_thinking),
+            reasoning_effort=str(turn_reasoning_effort) if turn_reasoning_effort else None,
+            agent_thinking=bool(_agent_thinking) if _agent_thinking is not None else True,
+            agent_reasoning_effort=str(_agent_effort) if _agent_effort else None,
         )
         streamed = False
         stream_provider = (
@@ -649,6 +755,7 @@ async def run_text_turn(
             llm_ok = llm_response.ok
             llm_error = llm_response.error
             llm_meta = llm_response.meta or {}
+        raw_text = _trim_repeated_answer(raw_text)
         image_actions = extract_image_xml_actions(raw_text)
         image_results = execute_image_xml_actions(
             image_actions,
@@ -746,13 +853,18 @@ async def run_text_turn(
         tool_runs = getattr(llm_request, "tool_runs", []) or []
         if tool_runs:
             meta["toolRuns"] = tool_runs
-            agg_queries = [run["query"] for run in tool_runs if run.get("query")]
+            # Só tools que trouxeram FONTES contam como "pesquisa web" — senão
+            # screen.find/terminal viram queries fantasma no card PESQUISA WEB.
+            agg_queries = [run["query"] for run in tool_runs if run.get("query") and run.get("sources")]
             agg_sources = [src for run in tool_runs for src in (run.get("sources") or [])]
             if agg_queries or agg_sources:
                 existing = meta.get("grounding") or {}
                 meta["grounding"] = {
                     "queries": list(dict.fromkeys([*existing.get("queries", []), *agg_queries])),
                     "sources": [*existing.get("sources", []), *agg_sources],
+                    # Preserve "gemini_native" if the native grounding already set it;
+                    # otherwise these sources came from a tool call (Tavily/MCP), not Google.
+                    "source": existing.get("source", "tool"),
                 }
         media = []
         if llm_meta and "media" in llm_meta:
@@ -770,15 +882,30 @@ async def run_text_turn(
                 status["tool_name"] = "image.xml"
                 status["detail"] = "Imagem XML processada."
         else:
-            is_attachment_error = "attachment_type_not_supported" in str(llm_error or "")
-            # Never dump the raw provider error onto her screen / into TTS. The technical
-            # detail still goes to meta["providerError"] + the terminal log + memory below,
-            # so the panel can debug it; but what she SEES/HEARS is a short in-character
-            # line, not "Provider groq nao conectado: empty_provider_response...".
+            error_text = str(llm_error or "")
+            is_attachment_error = "attachment_type_not_supported" in error_text
+            # No endpoints found + a preferred/pinned OpenRouter routing = the fixed
+            # endpoint doesn't support something the request needs (usually "tools",
+            # since Hana always sends tool schemas). Give a specific, actionable hint
+            # instead of the generic line — this one's fixable from Cerebro & Voz.
+            is_no_endpoint_for_pinned_routing = (
+                "no endpoints found" in error_text.lower()
+                and bool((payload.get("openrouter_routing") or {}).get("preferredEndpoint"))
+            )
+            # Never dump the raw provider error onto her screen / into TTS otherwise. The
+            # technical detail still goes to meta["providerError"] + the terminal log +
+            # memory below, so the panel can debug it; but what she SEES/HEARS is a short
+            # in-character line, not "Provider groq nao conectado: empty_provider_response...".
             if is_attachment_error:
-                final_text = "Nao consegui ler esse anexo aqui, Naka — manda de outro jeito que eu olho."
+                final_text = "Nao consegui ler esse anexo aqui, Operador — manda de outro jeito que eu olho."
+            elif is_no_endpoint_for_pinned_routing:
+                final_text = (
+                    "O endpoint que voce fixou pra esse modelo nao aceita tudo que eu preciso mandar agora "
+                    "(geralmente e o suporte a ferramentas/tools). Troca de endpoint em Cerebro & Voz "
+                    "ou volta pro 'Automatico'."
+                )
             else:
-                final_text = "Deu um tropeco no cerebro agora, Naka. Repete pra mim que eu pego de novo."
+                final_text = "Deu um tropeco no cerebro agora, Operador. Repete pra mim que eu pego de novo."
             if llm_ok and image_errors:
                 final_text = cleaned_text or "Falha ao gerar imagem."
             meta["providerError"] = llm_error or (image_errors[0] if image_errors else "provider_error")

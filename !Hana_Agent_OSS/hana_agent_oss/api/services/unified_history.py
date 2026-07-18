@@ -32,14 +32,17 @@ from hana_agent_oss.memory.store import MemoryStore
 # One "context" = 1 user turn + 1 assistant turn.
 # We keep the most recent N contexts, always dropping the oldest.
 VOICE_CONTEXT_LIMIT = 40        # 40 contexts = up to 80 messages (user + assistant). Good for long calls.
-CHAT_HISTORY_LIMIT = 12         # 6 turns for normal chat panel
+# Chat panel verbatim window. Subido de 12 -> 30 a pedido (15 idas-e-voltas). O que
+# cai daqui NAO some: a essencia vira memoria longa (RAG) + resumo no ciclo de sono.
+# Ajustavel por env sem mexer no codigo. Cuidado: cada msg entra no prompt TODO turno,
+# entao numero alto demais = resposta mais lenta/cara e modelo pequeno se perde.
+CHAT_HISTORY_LIMIT = int(os.environ.get("HANA_CHAT_HISTORY_LIMIT", "50"))  # 15 turns no chat
 VOICE_MESSAGE_MAX_CHARS = 450   # Truncate individual messages in voice history to control token usage.
 
 # Backward compatibility alias (old name used in some tests/docs)
 VOICE_HISTORY_LIMIT = VOICE_CONTEXT_LIMIT
 
 # Long-term persistent memory (RAG) injection tuning for voice calls
-LONGTERM_MEMORY_CANDIDATES = 20      # Pull this many candidates (recent + searched)
 LONGTERM_MEMORY_INJECTION_LIMIT = 7  # Hard cap of memories actually injected per turn (keeps latency good)
 # Voice keeps a smaller budget than the chat panel to protect call latency + TTS.
 VOICE_MEMORY_CHAR_BUDGET = int(os.environ.get("HANA_VOICE_MEMORY_CHARS", "12000"))  # ~3.3k tokens
@@ -528,7 +531,7 @@ _LEAKED_EVENT_RE = __import__("re").compile(
     r"|Enviando\s+para\s+Groq\s+Whisper"
     r"|TTS\s+(Elevenlabs|Edge|finalizada|interrompida)"
     r"|Runtime\s+(voltou|de\s+voz)"
-    r"|\bNaka\s+Naka\s*\(\d{5,}\)\s*:"  # model hallucinating the next Discord user line
+    r"|\bNaka\s+Operador\s*\(\d{5,}\)\s*:"  # model hallucinating the next Discord user line
     r"|\(\d{15,}\)\s*:"                  # any "(<discord id>):" speaker label
     r")"
 )
@@ -551,7 +554,7 @@ def strip_leaked_terminal_events(text: str) -> str:
 
 def _role_to_api(role: str) -> str:
     """Map MemoryStore event roles to LLM API roles (user / model)."""
-    if role in {"user", "system"}:
+    if role in {"user", "system", "operator"}:
         return "user"
     return "model"
 

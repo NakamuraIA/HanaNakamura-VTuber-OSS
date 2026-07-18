@@ -60,7 +60,7 @@ const MODULES: ModuleConfig[] = [
   {
     id: "visao",
     title: "Visao sob demanda",
-    description: "Slot de leitura de tela/imagem. Mantido como modulo opcional para evitar peso no runtime base.",
+    description: "So no Terminal Agente e na voz: a Hana captura sua tela sozinha quando o modelo suporta imagem. No Chat do Controle a visao e so por anexo manual (colar/arrastar imagem).",
     icon: <Eye size={24} />,
     neonColor: "purple",
   },

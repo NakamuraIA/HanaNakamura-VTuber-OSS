@@ -10,7 +10,6 @@ import json
 import re
 from typing import Any
 
-MEMORY_XML_TAGS = ("salvar_memoria",)
 MEMORY_TAG_NAME_RE = r"salvar[_\s-]*mem[oó]ria"
 MEMORY_XML_BLOCK_RE = re.compile(
     rf"<\s*{MEMORY_TAG_NAME_RE}\b[^>]*>.*?<\s*/\s*{MEMORY_TAG_NAME_RE}\s*>",

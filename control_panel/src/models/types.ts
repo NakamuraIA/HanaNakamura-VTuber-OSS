@@ -53,8 +53,22 @@ export interface LlmConfig {
   llmTemperature: number;
   /** Groq "pensar antes de falar": true = raciocina; false = resposta direta/rápida. */
   groqThinking?: boolean;
+  /** Qwen "pensar antes de falar" (modelos qwen3.x): true = raciocina; false = resposta direta/rápida. */
+  qwenThinking?: boolean;
+  /** Nivel de esforco do DeepSeek: "off"/"high"/"max" (so 2 niveis reais + desligado). Vazio = padrao deles (high). */
+  deepseekReasoningEffort?: string;
+  /** OpenRouter "pensar antes de falar" (so pros modelos com reasoning no supportedParameters). */
+  openrouterThinking?: boolean;
+  /** Nivel exato de esforco no slider do OpenRouter: none/minimal/low/medium/high/max. Vazio = automatico (usa openrouterThinking). */
+  openrouterReasoningEffort?: string;
+  /** "Pensar" do MODELO DE AGENTE (loop de ferramentas), independente do chat. Toggle pra groq/qwen. */
+  agentThinking?: boolean;
+  /** Nivel de esforco do MODELO DE AGENTE (slider deepseek/openrouter). Vazio = automatico. */
+  agentReasoningEffort?: string;
   openrouterRoutingByModel: Record<string, OpenRouterRoutingConfig>;
   visionModel: string;
+  /** Provider dono do visionModel. Vazio = mesmo do chat. Usado pra rotear imagem quando o chat nao ve. */
+  visionProvider?: string;
   ttsProvider: string;
   ttsVoice: string;
   ttsModel: string;
@@ -370,6 +384,17 @@ export interface ChatMessage {
     risk?: string;
     detail?: string;
   };
+  reasoning?: {
+    content: string;
+    elapsedMs?: number;
+  };
+  toolActivity?: Array<{
+    kind: "tool_call" | "tool_result";
+    tool: string;
+    args?: Record<string, unknown>;
+    result?: Record<string, unknown>;
+    timestamp: number;
+  }>;
 }
 
 export interface ChatSession {

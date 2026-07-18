@@ -27,10 +27,10 @@ export interface VoiceSpec {
 }
 
 // Fallback catalog used when the backend is offline.
-export const LLM_PROVIDERS = ["gemini_api", "openrouter", "groq", "deepseek"];
-export const TTS_PROVIDERS = ["google_cloud_tts", "gemini_tts", "edge", "azure", "cartesia", "minimax", "elevenlabs"];
+export const LLM_PROVIDERS = ["gemini_api", "openrouter", "groq", "deepseek", "qwen", "maritaca"];
+export const TTS_PROVIDERS = ["google_cloud_tts", "gemini_tts", "edge", "azure", "cartesia", "minimax", "elevenlabs", "fishaudio"];
 export const STT_PROVIDERS = ["groq_whisper", "gemini_audio", "local", "openai"];
-export const TERMINAL_TTS_PROVIDERS = ["edge", "gemini_tts", "google_cloud_tts", "cartesia", "azure", "minimax", "elevenlabs"];
+export const TERMINAL_TTS_PROVIDERS = ["edge", "gemini_tts", "google_cloud_tts", "cartesia", "azure", "minimax", "elevenlabs", "fishaudio"];
 
 export const MODEL_CATALOG: ModelSpec[] = [
   {
@@ -257,6 +257,133 @@ export const MODEL_CATALOG: ModelSpec[] = [
     maxOutputTokens: 384_000,
     pricing: { prompt: "0.000000435", completion: "0.00000087" },
   },
+  {
+    id: "qwen-plus",
+    label: "Qwen Plus (alias mais recente)",
+    provider: "qwen",
+    supportsVision: false,
+    supportsTools: true,
+    supportsNativeSearch: false,
+    inputModalities: ["text"],
+    outputModalities: ["text"],
+    supportedParameters: ["tools", "tool_choice", "response_format"],
+    maxInputTokens: 1_000_000,
+    maxOutputTokens: 32_768,
+    pricing: { prompt: "0.0000004", completion: "0.0000012" },
+  },
+  {
+    id: "qwen-turbo",
+    label: "Qwen Turbo (descontinuado)",
+    provider: "qwen",
+    supportsVision: false,
+    supportsTools: true,
+    supportsNativeSearch: false,
+    inputModalities: ["text"],
+    outputModalities: ["text"],
+    supportedParameters: ["tools", "tool_choice", "response_format"],
+    maxInputTokens: 1_000_000,
+    maxOutputTokens: 16_384,
+    pricing: { prompt: "0.00000005", completion: "0.0000002" },
+  },
+  {
+    id: "qwen-max",
+    label: "Qwen Max (alias mais recente)",
+    provider: "qwen",
+    supportsVision: false,
+    supportsTools: true,
+    supportsNativeSearch: false,
+    inputModalities: ["text"],
+    outputModalities: ["text"],
+    supportedParameters: ["tools", "tool_choice", "response_format"],
+    maxInputTokens: 262_144,
+    maxOutputTokens: 32_768,
+    pricing: { prompt: "0.0000016", completion: "0.0000064" },
+  },
+  {
+    id: "qwen3.5-flash",
+    label: "Qwen3.5 Flash (visão)",
+    provider: "qwen",
+    supportsVision: true,
+    supportsTools: true,
+    supportsNativeSearch: false,
+    inputModalities: ["text", "image"],
+    outputModalities: ["text"],
+    supportedParameters: ["tools", "tool_choice", "response_format"],
+    maxInputTokens: 1_000_000,
+    maxOutputTokens: 32_768,
+    pricing: { prompt: "0.000000065", completion: "0.00000026" },
+  },
+  {
+    id: "qwen3.7-plus",
+    label: "Qwen3.7 Plus (visão)",
+    provider: "qwen",
+    supportsVision: true,
+    supportsTools: true,
+    supportsNativeSearch: false,
+    inputModalities: ["text", "image"],
+    outputModalities: ["text"],
+    supportedParameters: ["tools", "tool_choice", "response_format"],
+    maxInputTokens: 1_000_000,
+    maxOutputTokens: 32_768,
+    pricing: { prompt: "0.00000032", completion: "0.00000128" },
+  },
+  {
+    id: "qwen3.7-max",
+    label: "Qwen3.7 Max",
+    provider: "qwen",
+    supportsVision: false,
+    supportsTools: true,
+    supportsNativeSearch: false,
+    inputModalities: ["text"],
+    outputModalities: ["text"],
+    supportedParameters: ["tools", "tool_choice", "response_format"],
+    maxInputTokens: 262_144,
+    maxOutputTokens: 32_768,
+    pricing: { prompt: "0.00000125", completion: "0.00000375" },
+  },
+  // Maritaca cobra em REAIS (R$), nao dolares -- valores abaixo sao por token em R$.
+  {
+    id: "sabia-4",
+    label: "Sabia 4",
+    provider: "maritaca",
+    supportsVision: false,
+    supportsTools: true,
+    supportsNativeSearch: false,
+    inputModalities: ["text"],
+    outputModalities: ["text"],
+    supportedParameters: ["tools", "tool_choice"],
+    maxInputTokens: 128_000,
+    maxOutputTokens: 32_000,
+    pricing: { prompt: "0.000005", completion: "0.00002" },
+  },
+  {
+    id: "sabia-4-thinking",
+    label: "Sabia 4 Thinking",
+    provider: "maritaca",
+    supportsVision: false,
+    supportsTools: true,
+    supportsNativeSearch: false,
+    inputModalities: ["text"],
+    outputModalities: ["text"],
+    supportedParameters: ["tools", "tool_choice"],
+    maxInputTokens: 128_000,
+    maxOutputTokens: 32_000,
+    pricing: { prompt: "0.000005", completion: "0.00004" },
+  },
+  {
+    id: "sabiazinho-4",
+    label: "Sabiazinho 4",
+    provider: "maritaca",
+    supportsVision: false,
+    supportsTools: true,
+    supportsNativeSearch: false,
+    inputModalities: ["text"],
+    outputModalities: ["text"],
+    supportedParameters: ["tools", "tool_choice"],
+    maxInputTokens: 128_000,
+    maxOutputTokens: 32_000,
+    pricing: { prompt: "0.000001", completion: "0.000004" },
+  },
 ];
 
 export const VOICE_CATALOG: VoiceSpec[] = [
@@ -282,6 +409,7 @@ export const VOICE_CATALOG: VoiceSpec[] = [
   { id: "Portuguese_ConfidentWoman", label: "Minimax Portuguese Confident Woman (pt-BR female)", provider: "minimax" },
   { id: "Portuguese_LovelyLady", label: "Minimax Portuguese Lovely Lady (pt-BR female)", provider: "minimax" },
   { id: "JBFqnCBsd6RMkjVDRZzb", label: "ElevenLabs documented sample voice", provider: "elevenlabs" },
+  { id: "", label: "Fish Audio voz padrao (sem reference_id)", provider: "fishaudio" },
 
   // Edge (Free/Browser)
   { id: "pt-BR-AntonioNeural", label: "Edge Antonio", provider: "edge" },
