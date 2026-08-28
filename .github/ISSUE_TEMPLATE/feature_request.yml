@@ -1,0 +1,36 @@
+name: Sugerir uma melhoria
+description: Proponha uma mudança pequena e explique o problema que ela resolve.
+title: "[Sugestão]: "
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Qual problema você quer resolver?
+      description: Descreva a dificuldade antes de sugerir a solução.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Solução sugerida
+      description: Explique como deveria funcionar para a pessoa usuária.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternativas consideradas
+      description: Opcional. Existe uma forma mais simples de resolver?
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Confirmações
+      options:
+        - label: Procurei uma sugestão semelhante antes de abrir esta.
+          required: true
+        - label: A proposta não depende de dados privados ou credenciais.
+          required: true
+

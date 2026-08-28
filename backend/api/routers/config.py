@@ -1,0 +1,601 @@
+from __future__ import annotations
+
+import logging
+from typing import Any
+
+from fastapi import APIRouter, HTTPException, Request
+
+logger = logging.getLogger(__name__)
+
+from backend.paths import MEDIA_DIR
+from backend.api.services.catalog import (
+    DEFAULT_CHAT_CONFIG,
+    DEFAULT_CONNECTIONS,
+    DEFAULT_LLM_CONFIG,
+    DEFAULT_VOICE_CONFIG,
+    catalog_payload,
+    delete_custom_model,
+    normalize_tts_streaming_mode,
+    upsert_custom_model,
+    voice_provider_catalog,
+)
+from backend.providers.tts import registry as tts_registry
+from backend.modules.voice.devices import list_input_devices, list_output_devices
+from backend.modules.voice.runtime import VoiceRuntime, voice_config_with_connections
+from backend.modules.vision.image_provider import normalize_image_provider
+from backend.modules.vision.periodic_vision import (
+    DEFAULT_VISION_QUALITY_PROFILE,
+    normalize_vision_quality_profile,
+)
+from backend.providers.provider_aliases import normalize_provider_id as _normalize_llm_provider_id
+from backend.providers.provider_selector.openrouter.catalog import get_openrouter_endpoints
+from backend.providers.provider_selector.qwen.catalog import normalize_qwen_region
+
+router = APIRouter()
+llm_chat_router = APIRouter(tags=["Configuração — LLM e chat"])
+voice_router = APIRouter(tags=["Configuração — voz"])
+connections_router = APIRouter(tags=["Configuração — conexões"])
+environment_router = APIRouter(tags=["Configuração — ambiente"])
+image_router = APIRouter(tags=["Configuração — imagem"])
+catalog_router = APIRouter(tags=["Catálogo"])
+
+
+def normalize_provider(provider: Any) -> str:
+    return _normalize_llm_provider_id(provider)
+
+
+def normalize_openrouter_routing_by_model(value: Any) -> dict[str, dict[str, Any]]:
+    """Normalize persisted per-model OpenRouter routing without accepting arbitrary fields."""
+    if not isinstance(value, dict):
+        return {}
+    normalized: dict[str, dict[str, Any]] = {}
+    for model_id, raw in value.items():
+        model = str(model_id or "").strip()
+        if not model or not isinstance(raw, dict):
+            continue
+        normalized[model] = {
+            "preferredEndpoint": str(raw.get("preferredEndpoint") or "").strip().lower(),
+            "allowFallbacks": bool(raw.get("allowFallbacks", True)),
+            "requireParameters": bool(raw.get("requireParameters", False)),
+            "dataCollection": "deny" if raw.get("dataCollection") == "deny" else "allow",
+            "zdr": bool(raw.get("zdr", False)),
+        }
+    return normalized
+
+
+def normalize_model_by_provider(value: Any) -> dict[str, str]:
+    """Preserva escolhas por provider, descartando chaves e IDs vazios."""
+    if not isinstance(value, dict):
+        return {}
+    normalized: dict[str, str] = {}
+    for raw_provider, raw_model in value.items():
+        raw_provider_id = str(raw_provider or "").strip()
+        if not raw_provider_id:
+            continue
+        provider = normalize_provider(raw_provider_id)
+        model = str(raw_model or "").strip()
+        if provider and model:
+            normalized[provider] = model
+    return normalized
+
+
+def normalize_llm_config(config: dict[str, Any]) -> dict[str, Any]:
+    """Normalize the primary LLM and chat-owned TTS settings."""
+    normalized = dict(DEFAULT_LLM_CONFIG)
+    normalized.update(config)
+    normalized["llmProvider"] = normalize_provider(normalized.get("llmProvider"))
+    normalized["qwenRegion"] = normalize_qwen_region(normalized.get("qwenRegion"))
+    normalized["agentModel"] = str(normalized.get("agentModel") or "").strip()
+    # Blank agentProvider means "use the same provider as the main model"; only normalize
+    # when the user actually picked one, so we never silently default it to gemini_api.
+    raw_agent_provider = str(normalized.get("agentProvider") or "").strip()
+    normalized["agentProvider"] = normalize_provider(raw_agent_provider) if raw_agent_provider else ""
+    for key in ("llmModelByProvider", "agentModelByProvider", "visionModelByProvider"):
+        normalized[key] = normalize_model_by_provider(normalized.get(key))
+    try:
+        rounds = int(normalized.get("agentToolRounds"))
+    except (TypeError, ValueError):
+        rounds = int(DEFAULT_LLM_CONFIG["agentToolRounds"])
+    # 0 = unlimited (no round cap); otherwise clamp to a sane range.
+    normalized["agentToolRounds"] = 0 if rounds <= 0 else min(500, rounds)
+    normalized["openrouterRoutingByModel"] = normalize_openrouter_routing_by_model(normalized.get("openrouterRoutingByModel"))
+    normalized["ttsProvider"] = normalize_tts_provider(normalized.get("ttsProvider"))
+    normalized["ttsLanguage"] = str(normalized.get("ttsLanguage") or DEFAULT_LLM_CONFIG["ttsLanguage"]).strip()
+    normalized["ttsPrompt"] = str(normalized.get("ttsPrompt") or DEFAULT_LLM_CONFIG["ttsPrompt"]).strip()
+    normalized["ttsStreaming"] = bool(normalized.get("ttsStreaming", False))
+    try:
+        normalized["ttsSpeed"] = float(normalized.get("ttsSpeed") or DEFAULT_LLM_CONFIG["ttsSpeed"])
+    except (TypeError, ValueError):
+        normalized["ttsSpeed"] = DEFAULT_LLM_CONFIG["ttsSpeed"]
+    try:
+        normalized["ttsPitch"] = float(normalized.get("ttsPitch") or DEFAULT_LLM_CONFIG["ttsPitch"])
+    except (TypeError, ValueError):
+        normalized["ttsPitch"] = DEFAULT_LLM_CONFIG["ttsPitch"]
+    _normalize_tts_volume(normalized, DEFAULT_LLM_CONFIG)
+    _normalize_elevenlabs_controls(normalized, DEFAULT_LLM_CONFIG)
+    if not isinstance(normalized.get("ttsByProvider"), dict):
+        normalized["ttsByProvider"] = {}
+    return normalized
+
+
+def normalize_chat_config(config: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(DEFAULT_CHAT_CONFIG)
+    normalized.update(config)
+    normalized["provider"] = normalize_provider(normalized.get("provider"))
+    normalized["openrouterRoutingByModel"] = normalize_openrouter_routing_by_model(normalized.get("openrouterRoutingByModel"))
+    # Gemini (grounding nativo) e OpenRouter (plugin web) suportam pesquisa nativa.
+    if normalized["provider"] not in {"gemini_api", "openrouter"}:
+        normalized["nativeSearchMode"] = "off"
+    return normalized
+
+
+STT_PROVIDER_IDS = {"groq_whisper", "openrouter", "gemini_audio", "google", "openai", "local"}
+
+
+def normalize_stt_provider(provider: Any) -> str:
+    value = str(provider or "").strip().lower()
+    aliases = {
+        "groq": "groq_whisper",
+        "whisper": "groq_whisper",
+        "whisper_large_v3": "groq_whisper",
+        "open_router": "openrouter",
+        "gemini": "gemini_audio",
+        "google": "gemini_audio",
+    }
+    value = aliases.get(value, value)
+    return value if value in STT_PROVIDER_IDS else "groq_whisper"
+
+
+def normalize_tts_provider(provider: Any) -> str:
+    value = str(provider or "").strip().lower()
+    aliases = {
+        "elevenlabs_tts": "elevenlabs",
+        "eleven_labs": "elevenlabs",
+        "fish_audio": "fishaudio",
+        "fish": "fishaudio",
+    }
+    value = aliases.get(value, value)
+    return value if value in tts_registry.SUPPORTED_TTS_PROVIDERS else tts_registry.DEFAULT_TTS_PROVIDER
+
+
+TTS_VOICE_ALIAS_PROVIDERS = {"fishaudio", "elevenlabs"}
+
+
+def normalize_tts_voice_aliases(value: Any) -> dict[str, dict[str, str]]:
+    """Normaliza nomes locais de vozes customizadas salvos no SQLite."""
+    if not isinstance(value, dict):
+        return {}
+    normalized: dict[str, dict[str, str]] = {}
+    for raw_provider, raw_aliases in value.items():
+        provider = str(raw_provider or "").strip().lower()
+        if provider not in TTS_VOICE_ALIAS_PROVIDERS or not isinstance(raw_aliases, dict):
+            continue
+        aliases: dict[str, str] = {}
+        for raw_voice_id, raw_name in raw_aliases.items():
+            voice_id = str(raw_voice_id or "").strip()
+            name = str(raw_name or "").strip()
+            if voice_id and name:
+                aliases[voice_id[:200]] = name[:80]
+        if aliases:
+            normalized[provider] = aliases
+    return normalized
+
+
+def normalize_voice_config(config: dict[str, Any]) -> dict[str, Any]:
+    """Normalize Terminal Agent provider/device options without owning on/off state."""
+    normalized = dict(DEFAULT_VOICE_CONFIG)
+    normalized.update(config)
+    normalized["sttProvider"] = normalize_stt_provider(normalized.get("sttProvider"))
+    normalized["ttsProvider"] = normalize_tts_provider(normalized.get("ttsProvider"))
+    normalized["speakTerminalEvents"] = bool(normalized.get("speakTerminalEvents", True))
+    normalized["callMode"] = bool(normalized.get("callMode", False))
+    streaming_mode = normalize_tts_streaming_mode(
+        config.get("ttsStreamingMode"),
+        legacy_streaming=bool(config.get("ttsStreaming", False)),
+    )
+    normalized["ttsStreamingMode"] = streaming_mode
+    normalized["ttsStreaming"] = streaming_mode != "off"
+    normalized["ttsPrompt"] = str(normalized.get("ttsPrompt") or DEFAULT_VOICE_CONFIG.get("ttsPrompt") or "").strip()
+    normalized["inputDeviceId"] = str(normalized.get("inputDeviceId") or "").strip()
+    normalized["inputDeviceLabel"] = str(normalized.get("inputDeviceLabel") or "").strip()
+    normalized["inputDeviceSource"] = str(normalized.get("inputDeviceSource") or "sounddevice").strip()
+    normalized["secondOutputEnabled"] = bool(normalized.get("secondOutputEnabled", False))
+    normalized["secondOutputDeviceId"] = str(normalized.get("secondOutputDeviceId") or "").strip()
+    normalized["secondOutputDeviceLabel"] = str(normalized.get("secondOutputDeviceLabel") or "").strip()
+    try:
+        normalized["ttsSpeed"] = float(normalized.get("ttsSpeed") or DEFAULT_VOICE_CONFIG["ttsSpeed"])
+    except (TypeError, ValueError):
+        normalized["ttsSpeed"] = DEFAULT_VOICE_CONFIG["ttsSpeed"]
+    try:
+        normalized["ttsPitch"] = float(normalized.get("ttsPitch") or DEFAULT_VOICE_CONFIG["ttsPitch"])
+    except (TypeError, ValueError):
+        normalized["ttsPitch"] = DEFAULT_VOICE_CONFIG["ttsPitch"]
+    _normalize_tts_volume(normalized, DEFAULT_VOICE_CONFIG)
+    _normalize_elevenlabs_controls(normalized, DEFAULT_VOICE_CONFIG)
+    try:
+        normalized["vadThreshold"] = float(normalized.get("vadThreshold") or DEFAULT_VOICE_CONFIG["vadThreshold"])
+    except (TypeError, ValueError):
+        normalized["vadThreshold"] = DEFAULT_VOICE_CONFIG["vadThreshold"]
+    try:
+        normalized["silenceTimeoutMs"] = int(normalized.get("silenceTimeoutMs") or DEFAULT_VOICE_CONFIG["silenceTimeoutMs"])
+    except (TypeError, ValueError):
+        normalized["silenceTimeoutMs"] = DEFAULT_VOICE_CONFIG["silenceTimeoutMs"]
+    return normalized
+
+
+def _normalize_tts_volume(config: dict[str, Any], defaults: dict[str, Any]) -> None:
+    """Clamp local playback volume without changing provider synthesis payloads."""
+    try:
+        value = float(config.get("ttsVolume", defaults["ttsVolume"]))
+    except (TypeError, ValueError):
+        value = float(defaults["ttsVolume"])
+    config["ttsVolume"] = max(0.0, min(1.0, value))
+
+
+def _normalize_elevenlabs_controls(config: dict[str, Any], defaults: dict[str, Any]) -> None:
+    """Clamp persisted ElevenLabs voice controls to the supported API ranges."""
+    for key in ("ttsStability", "ttsSimilarity", "ttsStyle"):
+        try:
+            value = float(config.get(key, defaults[key]))
+        except (TypeError, ValueError):
+            value = float(defaults[key])
+        config[key] = max(0.0, min(1.0, value))
+    config["ttsSpeakerBoost"] = bool(config.get("ttsSpeakerBoost", defaults["ttsSpeakerBoost"]))
+
+
+
+def normalize_connections_config(config: dict[str, Any]) -> dict[str, Any]:
+    """Normalize global feature toggles owned by the Connections tab.
+
+    So mantem as chaves oficiais (DEFAULT_CONNECTIONS). Campos legado persistidos
+    por versoes antigas (vts/omni/grok*/minecraft*/discordSpeak...) sao descartados
+    aqui, entao somem do banco no proximo save em vez de ecoar pra sempre.
+    """
+    normalized = dict(DEFAULT_CONNECTIONS)
+    if isinstance(config, dict):
+        for key in DEFAULT_CONNECTIONS:
+            if key in config:
+                normalized[key] = config[key]
+    for key in ("tts", "stt", "vad", "ptt", "stopHotkey", "discord", "localHands", "visao"):
+        normalized[key] = bool(normalized.get(key))
+    normalized["pttKey"] = str(normalized.get("pttKey") or DEFAULT_CONNECTIONS["pttKey"]).strip() or DEFAULT_CONNECTIONS["pttKey"]
+    normalized["stopKey"] = str(normalized.get("stopKey") or DEFAULT_CONNECTIONS["stopKey"]).strip() or DEFAULT_CONNECTIONS["stopKey"]
+    return normalized
+
+
+def _default_media_output_path() -> str:
+    """Onde a Hana salva imagem/audio que ela mesma gera.
+
+    Dentro do projeto (runtime/media), nao em Pictures: runtime/ e a unica pasta
+    onde ela escreve, entao backup e reset continuam sendo copiar/apagar UMA pasta.
+    """
+    return str(MEDIA_DIR)
+
+
+DEFAULT_PORTABILITY_CONFIG = {
+    "ffmpegPath": "ffmpeg",
+    "mediaOutputPath": _default_media_output_path(),
+    "activeMonitor": 1,
+    "visionQualityProfile": DEFAULT_VISION_QUALITY_PROFILE,
+}
+
+
+def normalize_portability_config(config: dict[str, Any]) -> dict[str, Any]:
+    """Normalize PC environment settings."""
+    normalized = dict(DEFAULT_PORTABILITY_CONFIG)
+    normalized.update(config)
+    normalized["ffmpegPath"] = str(normalized.get("ffmpegPath") or "ffmpeg").strip()
+    media_path = str(normalized.get("mediaOutputPath") or "").strip()
+    if not media_path or media_path in (".", "./", "data", "./data", "data/", "./data/"):
+        media_path = _default_media_output_path()
+    normalized["mediaOutputPath"] = media_path
+    normalized["visionQualityProfile"] = normalize_vision_quality_profile(normalized.get("visionQualityProfile"))
+    try:
+        normalized["activeMonitor"] = int(normalized.get("activeMonitor", 1))
+    except (TypeError, ValueError):
+        normalized["activeMonitor"] = 1
+    return normalized
+
+
+def _runtime(request: Request) -> VoiceRuntime:
+    runtime = getattr(request.app.state, "voice_runtime", None)
+    if runtime is None or getattr(runtime, "memory", None) is not request.app.state.memory:
+        runtime = VoiceRuntime(memory=request.app.state.memory, core=request.app.state.core)
+        request.app.state.voice_runtime = runtime
+    return runtime
+
+
+def _sync_voice_runtime(request: Request, connections: dict[str, Any] | None = None) -> None:
+    """Apply persisted voice/connections settings to the backend runtime immediately."""
+    runtime = _runtime(request)
+    config = voice_config_with_connections(request.app.state.memory)
+    runtime.configure_hotkeys(connections or normalize_connections_config(request.app.state.memory.get_setting("connections_config", dict(DEFAULT_CONNECTIONS))))
+    if config.get("sttEnabled"):
+        runtime.start(config)
+    else:
+        runtime.apply_config(config)
+        if runtime.status().get("running"):
+            runtime.stop(reason="connections_stt_off")
+
+
+def voice_config_with_connection_state(request: Request, config: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Return voice options plus read-only STT/TTS activation state from Connections."""
+    voice_config = normalize_voice_config(config or request.app.state.memory.get_setting("voice_config", dict(DEFAULT_VOICE_CONFIG)))
+    connections = normalize_connections_config(request.app.state.memory.get_setting("connections_config", dict(DEFAULT_CONNECTIONS)))
+    return {
+        **voice_config,
+        "sttEnabled": connections["stt"],
+        "ttsEnabled": connections["tts"],
+        "connectionState": {
+            "stt": connections["stt"],
+            "tts": connections["tts"],
+            "owner": "connections",
+        },
+    }
+
+
+def resolve_chat_config(request: Request) -> dict[str, Any]:
+    chat_config = request.app.state.memory.get_setting("chat_config", None)
+    if isinstance(chat_config, dict):
+        return normalize_chat_config(chat_config)
+    llm_config = normalize_llm_config(request.app.state.memory.get_setting("llm_config", dict(DEFAULT_LLM_CONFIG)))
+    return normalize_chat_config({
+        "provider": llm_config.get("llmProvider"),
+        "model": str(llm_config.get("llmModel") or DEFAULT_CHAT_CONFIG["model"]),
+        "nativeSearchMode": DEFAULT_CHAT_CONFIG["nativeSearchMode"],
+    })
+
+
+@llm_chat_router.get("/api/config/llm", summary="Ler config do modelo principal")
+async def get_llm_config(request: Request) -> dict[str, Any]:
+    return normalize_llm_config(request.app.state.memory.get_setting("llm_config", dict(DEFAULT_LLM_CONFIG)))
+
+
+@llm_chat_router.post("/api/config/llm", summary="Salvar config do modelo principal")
+async def update_llm_config(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
+    current = normalize_llm_config(request.app.state.memory.get_setting("llm_config", dict(DEFAULT_LLM_CONFIG)))
+    current.update(payload)
+    return request.app.state.memory.set_setting("llm_config", normalize_llm_config(current))
+
+
+@llm_chat_router.get("/api/config/chat", summary="Ler config do chat")
+async def get_chat_config(request: Request) -> dict[str, Any]:
+    return resolve_chat_config(request)
+
+
+@llm_chat_router.post("/api/config/chat", summary="Salvar config do chat")
+async def update_chat_config(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
+    current = resolve_chat_config(request)
+    current.update(payload)
+    return request.app.state.memory.set_setting("chat_config", normalize_chat_config(current))
+
+
+@voice_router.get("/api/config/voice", summary="Ler config de voz")
+async def get_voice_config(request: Request) -> dict[str, Any]:
+    return voice_config_with_connection_state(request)
+
+
+@voice_router.post("/api/config/voice", summary="Salvar config de voz")
+async def update_voice_config(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
+    current = normalize_voice_config(request.app.state.memory.get_setting("voice_config", dict(DEFAULT_VOICE_CONFIG)))
+    payload = {key: value for key, value in payload.items() if key not in {"sttEnabled", "ttsEnabled", "connectionState"}}
+    if "ttsStreaming" in payload and "ttsStreamingMode" not in payload:
+        current.pop("ttsStreamingMode", None)
+    current.update(payload)
+    saved = request.app.state.memory.set_setting("voice_config", normalize_voice_config(current))
+    _runtime(request).apply_config(voice_config_with_connections(request.app.state.memory))
+    return voice_config_with_connection_state(request, saved)
+
+
+@voice_router.get("/api/config/voice/aliases", summary="Listar nomes das vozes customizadas")
+async def get_tts_voice_aliases(request: Request) -> dict[str, dict[str, str]]:
+    return normalize_tts_voice_aliases(request.app.state.memory.get_setting("tts_voice_aliases", {}))
+
+
+@voice_router.post("/api/config/voice/aliases", summary="Salvar nome de uma voz customizada")
+async def save_tts_voice_alias(request: Request, payload: dict[str, Any]) -> dict[str, dict[str, str]]:
+    provider = str(payload.get("provider") or "").strip().lower()
+    voice_id = str(payload.get("voiceId") or "").strip()
+    name = str(payload.get("name") or "").strip()
+    if provider not in TTS_VOICE_ALIAS_PROVIDERS:
+        raise HTTPException(status_code=400, detail="Provider de voz não aceita nomes customizados.")
+    if not voice_id or not name:
+        raise HTTPException(status_code=400, detail="Informe o identificador e o nome da voz.")
+
+    aliases = normalize_tts_voice_aliases(request.app.state.memory.get_setting("tts_voice_aliases", {}))
+    aliases.setdefault(provider, {})[voice_id[:200]] = name[:80]
+    return request.app.state.memory.set_setting("tts_voice_aliases", aliases)
+
+
+@voice_router.get("/api/config/voice/input-devices", summary="Listar microfones")
+async def get_voice_input_devices() -> dict[str, Any]:
+    return list_input_devices()
+
+
+@voice_router.get("/api/config/voice/output-devices", summary="Listar saídas de áudio")
+async def get_voice_output_devices() -> dict[str, Any]:
+    return list_output_devices()
+
+
+@voice_router.get("/api/config/voice/catalog", summary="Catálogo de providers de voz")
+async def get_voice_catalog() -> dict[str, Any]:
+    """Sempre ao vivo (ttsProviders vem do banco) — sem cache de setting pra nao
+    ficar obsoleto vs. o que foi cadastrado na aba Modelos."""
+    return voice_provider_catalog()
+
+
+@connections_router.get("/api/config/conexoes", summary="Ler o que está ligado (voz, Discord, visão)")
+async def get_connections(request: Request) -> dict[str, Any]:
+    return normalize_connections_config(request.app.state.memory.get_setting("connections_config", dict(DEFAULT_CONNECTIONS)))
+
+
+@connections_router.post("/api/config/conexoes", summary="Ligar/desligar recursos")
+async def update_connections(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
+    current = normalize_connections_config(request.app.state.memory.get_setting("connections_config", dict(DEFAULT_CONNECTIONS)))
+    current.update(payload)
+    saved = request.app.state.memory.set_setting("connections_config", normalize_connections_config(current))
+    _sync_voice_runtime(request, saved)
+    # Liga/desliga o bot do Discord junto do toggle (idempotente; no-op sem token).
+    manager = getattr(request.app.state, "discord_bot", None)
+    if manager is not None:
+        try:
+            saved["discordBot"] = manager.apply(enabled=bool(saved.get("discord")))
+        except Exception:
+            logger.exception("Falha ao aplicar estado do bot do Discord.")
+    return saved
+
+
+@environment_router.get("/api/config/portabilidade", summary="Ler caminhos da máquina (ffmpeg, mídia)")
+async def get_portability_config(request: Request) -> dict[str, Any]:
+    return normalize_portability_config(request.app.state.memory.get_setting("portabilidade_config", dict(DEFAULT_PORTABILITY_CONFIG)))
+
+
+@environment_router.post("/api/config/portabilidade", summary="Salvar caminhos da máquina")
+async def update_portability_config(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
+    current = normalize_portability_config(request.app.state.memory.get_setting("portabilidade_config", dict(DEFAULT_PORTABILITY_CONFIG)))
+    current.update(payload)
+    return request.app.state.memory.set_setting("portabilidade_config", normalize_portability_config(current))
+
+
+@environment_router.get("/api/config/aparencia", summary="Ler tema, identidade e acessibilidade")
+async def get_ui_config(request: Request) -> dict[str, Any]:
+    """Tema, identidade e acessibilidade compartilhados entre interfaces.
+
+    Isto vivia SO no localStorage do navegador: sumia ao limpar os dados e nao
+    existia fora daquele PC. Agora o banco e a copia duravel — o front segue
+    usando o localStorage como cache rapido, pra tela nao piscar sem tema no
+    primeiro render.
+
+    Num blob so (`ui_config`) de proposito: sao dados de aparencia que mudam
+    juntos, e o backend nunca precisa ler um campo isolado.
+    """
+    stored = request.app.state.memory.get_setting("ui_config", {})
+    return stored if isinstance(stored, dict) else {}
+
+
+@environment_router.post("/api/config/aparencia", summary="Salvar tema, identidade e acessibilidade")
+async def update_ui_config(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
+    """Mescla por chave de topo (`theme`, `identity`, `accessibility`).
+
+    Mesclar em vez de substituir: a aba de tema salva so `theme`, e sem isso ela
+    apagaria a `identity` que a outra aba gravou.
+    """
+    current = request.app.state.memory.get_setting("ui_config", {})
+    if not isinstance(current, dict):
+        current = {}
+    for chave in ("theme", "identity", "accessibility"):
+        if isinstance(payload.get(chave), dict):
+            current[chave] = payload[chave]
+    request.app.state.memory.set_setting("ui_config", current)
+    return {"ok": True, "ui": current}
+
+
+@environment_router.get("/api/config/visao/monitors", summary="Listar monitores pra visão de tela")
+async def get_vision_monitors() -> dict[str, Any]:
+    monitors = []
+    try:
+        import mss
+        with mss.mss() as sct:
+            for idx, m in enumerate(sct.monitors):
+                label = "Tela Combinada" if idx == 0 else f"Monitor {idx}"
+                monitors.append({
+                    "id": idx,
+                    "label": f"{label} ({m['width']}x{m['height']})",
+                    "width": m["width"],
+                    "height": m["height"]
+                })
+    except Exception as e:
+        monitors = [{"id": 1, "label": "Monitor 1 (1920x1080)", "width": 1920, "height": 1080}]
+    return {"monitors": monitors}
+
+
+@llm_chat_router.get("/api/agent/settings", summary="Ler modo de segurança do agente")
+async def get_agent_settings(request: Request) -> dict[str, Any]:
+    return request.app.state.memory.get_setting("agent_settings", {"safety_mode": "safe"})
+
+
+@llm_chat_router.post("/api/agent/settings", summary="Salvar modo de segurança do agente")
+async def update_agent_settings(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
+    return request.app.state.memory.set_setting("agent_settings", {"safety_mode": str(payload.get("safety_mode") or "safe")})
+
+
+# ---------------------------------------------------------------------------
+# Image provider configuration
+# ---------------------------------------------------------------------------
+
+DEFAULT_IMAGE_CONFIG: dict[str, Any] = {
+    "imageProvider": "gemini_api",
+    "imageModel": "",
+    # Compatibilidade temporaria; remover so depois de nao haver consumidores.
+    "openrouterImageModel": "",
+    "openrouterReasoning": "medium",
+}
+
+
+def normalize_image_config(config: dict[str, Any]) -> dict[str, Any]:
+    """Normalize image generation settings."""
+    normalized = dict(DEFAULT_IMAGE_CONFIG)
+    normalized.update(config)
+    normalized["imageProvider"] = normalize_image_provider(normalized.get("imageProvider"))
+    image_model = str(
+        normalized.get("imageModel") or normalized.get("openrouterImageModel") or ""
+    ).strip()
+    normalized["imageModel"] = image_model
+    normalized["openrouterImageModel"] = image_model
+    normalized["openrouterReasoning"] = str(normalized.get("openrouterReasoning") or "medium").strip()
+    return normalized
+
+
+@image_router.get("/api/config/image", summary="Ler config de geração de imagem")
+async def get_image_config(request: Request) -> dict[str, Any]:
+    """Return image generation provider configuration."""
+    return normalize_image_config(request.app.state.memory.get_setting("image_config", dict(DEFAULT_IMAGE_CONFIG)))
+
+
+@image_router.post("/api/config/image", summary="Salvar config de geração de imagem")
+async def update_image_config(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
+    """Update image generation provider configuration."""
+    current = normalize_image_config(request.app.state.memory.get_setting("image_config", dict(DEFAULT_IMAGE_CONFIG)))
+    current.update(payload)
+    if "imageModel" in payload:
+        current["openrouterImageModel"] = payload.get("imageModel")
+    elif "openrouterImageModel" in payload:
+        current["imageModel"] = payload.get("openrouterImageModel")
+    saved = request.app.state.memory.set_setting("image_config", normalize_image_config(current))
+    # Also persist the provider ID separately for ImageGenerationService to pick up.
+    request.app.state.memory.set_setting("image_provider", saved.get("imageProvider", "gemini_api"))
+    return saved
+
+
+
+@catalog_router.get("/api/catalog", summary="Catálogo de providers e modelos")
+async def catalog(request: Request) -> dict[str, Any]:
+    return catalog_payload()
+
+
+@catalog_router.get("/api/catalog/openrouter/endpoints", summary="Endpoints de um modelo no OpenRouter")
+async def openrouter_endpoints(model: str) -> dict[str, Any]:
+    """Expose the endpoint catalog for one OpenRouter model."""
+    endpoints, error = get_openrouter_endpoints(model)
+    return {"model": model, "endpoints": endpoints, "error": error}
+
+
+@catalog_router.post("/api/catalog/custom-models", summary="Cadastrar modelo manual")
+async def create_custom_model(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
+    return {"status": "ok", "model": upsert_custom_model(payload)}
+
+
+@catalog_router.delete("/api/catalog/custom-models", summary="Remover modelo manual")
+async def remove_custom_model(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
+    return {"status": "ok", "deleted": delete_custom_model(payload)}
+
+
+for domain_router in (
+    llm_chat_router,
+    voice_router,
+    connections_router,
+    environment_router,
+    image_router,
+    catalog_router,
+):
+    router.include_router(domain_router)

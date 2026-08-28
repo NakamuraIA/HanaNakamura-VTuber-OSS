@@ -1,0 +1,604 @@
+from __future__ import annotations
+
+import asyncio
+import logging
+import os
+import time
+from base64 import b64encode
+from dataclasses import dataclass
+from email import policy
+from email.parser import BytesParser
+from typing import Any
+from uuid import uuid4
+
+from fastapi import APIRouter, HTTPException, Query, Request
+
+from backend.api.services.catalog import DEFAULT_CONNECTIONS
+from backend.api.services.catalog import DEFAULT_LLM_CONFIG
+from backend.api.services.catalog import DEFAULT_VOICE_CONFIG
+from backend.api.services.chat import STREAMING_PROVIDERS, run_text_turn
+from backend.api.services.terminal_agent import append_terminal_event, publish_terminal_stream
+from backend.api.services.unified_history import build_unified_history
+from backend.providers.stt import registry as stt_registry
+from backend.providers.tts import registry as tts_registry
+from backend.modules.voice.audio_control import request_global_stop
+from backend.modules.voice.runtime import VoiceRuntime, voice_config_with_connections
+from backend.modules.voice.speech_state import set_speaking
+from backend.providers.stt.registry import STTConfigurationError
+from backend.providers.tts.edge import TTSConfigurationError
+from backend.modules.voice.tts_readable import sanitize_tts_text
+from backend.providers.provider_aliases import PROVIDER_ALIASES
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/api/voice", tags=["Voz"])
+
+DEFAULT_AUDIO_FILENAME = "audio.wav"
+MAX_AUDIO_UPLOAD_BYTES = int(os.environ.get("HANA_STT_MAX_UPLOAD_MB", "25")) * 1024 * 1024
+
+
+@dataclass(frozen=True)
+class AudioUpload:
+    audio: bytes
+    filename: str
+    content_type: str
+    fields: dict[str, str]
+
+
+def _float_or_default(value: Any, default: float) -> float:
+    """Normalize loose frontend numeric values before provider construction."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _runtime(request: Request) -> VoiceRuntime:
+    runtime = getattr(request.app.state, "voice_runtime", None)
+    if runtime is None or getattr(runtime, "memory", None) is not request.app.state.memory:
+        runtime = VoiceRuntime(memory=request.app.state.memory, core=request.app.state.core)
+        request.app.state.voice_runtime = runtime
+    return runtime
+
+
+def _connections_config(request: Request) -> dict[str, Any]:
+    """Return persisted Connections as the authority for voice runtime state."""
+    config = request.app.state.memory.get_setting("connections_config", dict(DEFAULT_CONNECTIONS))
+    if not isinstance(config, dict):
+        config = {}
+    merged = dict(DEFAULT_CONNECTIONS)
+    merged.update(config)
+    return merged
+
+
+def _sync_runtime_from_persisted_config(request: Request, *, start_requested: bool = False) -> dict[str, Any]:
+    """Apply persisted voice settings without trusting runtime endpoint payload toggles."""
+    runtime = _runtime(request)
+    connections = _connections_config(request)
+    config = voice_config_with_connections(request.app.state.memory)
+    runtime.configure_hotkeys(connections)
+    if start_requested and bool(config.get("sttEnabled")):
+        return runtime.start(config)
+    status = runtime.apply_config(config)
+    if not bool(config.get("sttEnabled")) and bool(status.get("running")):
+        return runtime.stop(reason="connections_stt_off")
+    return status
+
+
+def _field_bool(fields: dict[str, str], name: str, default: bool = False) -> bool:
+    value = str(fields.get(name, default)).strip().lower()
+    return value in {"1", "true", "yes", "on", "sim"}
+
+
+def _normalize_llm_provider(provider: str | None) -> str:
+    # Voz usa "agent_core" como fallback (nao gemini_api) quando o campo vem vazio.
+    value = str(provider or "").strip().lower()
+    return PROVIDER_ALIASES.get(value, value or "agent_core")
+
+
+def _voice_llm_payload(request: Request, fields: dict[str, str], text: str) -> dict[str, Any]:
+    """Build the text-turn payload from the main Cerebro & Voz LLM config."""
+    config = request.app.state.memory.get_setting("llm_config", dict(DEFAULT_LLM_CONFIG))
+    if not isinstance(config, dict):
+        config = dict(DEFAULT_LLM_CONFIG)
+    agent_settings = request.app.state.memory.get_setting("agent_settings", {"safety_mode": "safe"})
+    if not isinstance(agent_settings, dict):
+        agent_settings = {"safety_mode": "safe"}
+
+    provider = _normalize_llm_provider(fields.get("llmProvider") or fields.get("llm_provider") or config.get("llmProvider"))
+    return {
+        "text": text,
+        "provider": provider,
+        "model": fields.get("llmModel") or fields.get("llm_model") or config.get("llmModel") or "structured-planner",
+        "temperature": config.get("llmTemperature", 0.7),
+        "native_search_mode": "off" if provider != "gemini_api" else (fields.get("nativeSearchMode") or fields.get("native_search_mode") or "auto"),
+        "safety_mode": fields.get("safetyMode") or fields.get("safety_mode") or agent_settings.get("safety_mode") or "safe",
+        "channel": "terminal_agent",
+        # BUG antigo: era [] fixo — mensagem digitada rodava SEM histórico nenhum
+        # (o meter mostrava "historico 0.0k" e a Hana esquecia a conversa ao digitar).
+        # A voz PTT sempre montou o unificado; agora o texto manual também.
+        "history": build_unified_history(request.app.state.memory, channel="terminal_agent"),
+        "openrouter_routing": (
+            config.get("openrouterRoutingByModel", {}).get(str(fields.get("llmModel") or fields.get("llm_model") or config.get("llmModel") or ""), {})
+            if provider == "openrouter" and isinstance(config.get("openrouterRoutingByModel"), dict)
+            else {}
+        ),
+    }
+
+
+async def _run_voice_text_response(request: Request, fields: dict[str, str], text: str) -> dict[str, Any]:
+    append_terminal_event(
+        request.app.state.memory,
+        {
+            "kind": "assistant_thought",
+            "source": "agent_core",
+            "displayText": "Mensagem recebida. Gerando resposta em texto.",
+            "status": "planning",
+            "metadata": {"tts": False},
+        },
+    )
+    llm_payload = _voice_llm_payload(request, fields, text)
+    stream_id = uuid4().hex
+
+    async def on_delta(token: str) -> None:
+        publish_terminal_stream({"type": "delta", "streamId": stream_id, "delta": token})
+
+    try:
+        assistant_payload = await run_text_turn(
+            llm_payload,
+            core=request.app.state.core,
+            memory=request.app.state.memory,
+            on_delta=on_delta if llm_payload.get("provider") in STREAMING_PROVIDERS else None,
+        )
+    except Exception:
+        publish_terminal_stream({"type": "done", "streamId": stream_id})
+        raise
+    meta = assistant_payload.get("meta", {})
+    if isinstance(meta, dict) and "grounding" in meta:
+        grounding = meta["grounding"]
+        queries = grounding.get("queries", [])
+        sources = grounding.get("sources", [])
+        if queries or sources:
+            is_gemini_native = grounding.get("source") == "gemini_native"
+            title_line = "🔍 GOOGLE NATIVE SEARCH GROUNDING" if is_gemini_native else "🔍 PESQUISA WEB"
+            lines = [title_line]
+            if queries:
+                lines.append(f"Queries: {', '.join(f'\"{q}\"' for q in queries)}")
+            if sources:
+                lines.append(f"\nFontes indexadas{' pelo Gemini' if is_gemini_native else ''}:")
+                for s in sources:
+                    title = s.get("title") or "Fonte"
+                    uri = s.get("uri")
+                    if uri:
+                        lines.append(f"• {title}\n  {uri}")
+
+            tool_name = "google_search" if is_gemini_native else "web_search"
+            append_terminal_event(
+                request.app.state.memory,
+                {
+                    "kind": "tool_result",
+                    "source": tool_name,
+                    "displayText": "\n".join(lines),
+                    "speechText": "",
+                    "status": "success",
+                    "toolName": tool_name,
+                    "metadata": {"tts": False, "grounding": grounding},
+                },
+            )
+
+    if isinstance(meta, dict) and meta.get("media") and not meta.get("imageActions"):
+        append_terminal_event(
+            request.app.state.memory,
+            {
+                "kind": "tool_result",
+                "source": "image_generation",
+                "displayText": "Imagem gerada e anexada ao chat.",
+                "speechText": "",
+                "status": assistant_payload["status"].get("stage", "done"),
+                "toolName": assistant_payload["status"].get("tool_name") or "image.generate",
+                "metadata": {"tts": False, "media": meta.get("media")},
+            },
+        )
+
+    append_terminal_event(
+        request.app.state.memory,
+        {
+            "kind": "assistant_text",
+            "source": "hana",
+            "displayText": assistant_payload["text"],
+            "speechText": "",
+            "status": assistant_payload["status"].get("stage", "done"),
+            "metadata": {
+                "provider": assistant_payload["meta"].get("provider"),
+                "model": assistant_payload["meta"].get("model"),
+                "tts": False,
+                "streamId": stream_id,
+            },
+        },
+    )
+    publish_terminal_stream({"type": "done", "streamId": stream_id})
+    return assistant_payload
+
+
+def _voice_config(request: Request) -> dict[str, Any]:
+    config = request.app.state.memory.get_setting("voice_config", dict(DEFAULT_VOICE_CONFIG))
+    if not isinstance(config, dict):
+        config = dict(DEFAULT_VOICE_CONFIG)
+    merged = dict(DEFAULT_VOICE_CONFIG)
+    merged.update(config)
+    return merged
+
+
+def _chat_tts_config(request: Request) -> dict[str, Any]:
+    """Read the 'TTS do Chat' profile (llm_config) as a voice-config-shaped dict.
+
+    O Discord toca a fala pela mesma voz do Chat do Controle, nao pela do Terminal
+    Agente. O llm_config guarda os mesmos campos ttsProvider/ttsVoice/ttsModel/etc,
+    entao ele encaixa direto onde o endpoint espera um voice_config.
+    """
+    llm = request.app.state.memory.get_setting("llm_config", {})
+    if not isinstance(llm, dict):
+        return dict(DEFAULT_VOICE_CONFIG)
+    merged = dict(DEFAULT_VOICE_CONFIG)
+    # So os campos de TTS interessam aqui; o resto do llm_config e ignorado.
+    for key in (
+        "ttsProvider", "ttsVoice", "ttsModel", "ttsLanguage", "ttsPrompt",
+        "ttsSpeed", "ttsPitch", "ttsStreaming", "ttsStability", "ttsSimilarity",
+        "ttsStyle", "ttsSpeakerBoost", "ttsLatency",
+    ):
+        if key in llm:
+            merged[key] = llm[key]
+    return merged
+def _clean_filename(filename: str | None) -> str:
+    value = str(filename or DEFAULT_AUDIO_FILENAME).replace("\\", "/").split("/")[-1].strip()
+    return value or DEFAULT_AUDIO_FILENAME
+
+
+def _decode_form_value(payload: bytes, charset: str | None = None) -> str:
+    return payload.decode(charset or "utf-8", errors="replace").strip()
+
+
+def _parse_multipart_upload(content_type: str, body: bytes) -> AudioUpload:
+    message = BytesParser(policy=policy.default).parsebytes(
+        b"Content-Type: " + content_type.encode("utf-8") + b"\r\nMIME-Version: 1.0\r\n\r\n" + body
+    )
+    fields: dict[str, str] = {}
+    audio: bytes | None = None
+    filename = DEFAULT_AUDIO_FILENAME
+    audio_content_type = "application/octet-stream"
+
+    for part in message.iter_parts():
+        disposition = part.get_content_disposition()
+        if disposition != "form-data":
+            continue
+
+        name = str(part.get_param("name", header="content-disposition") or "").strip()
+        part_filename = part.get_filename()
+        payload = part.get_payload(decode=True) or b""
+
+        if part_filename or name in {"file", "audio", "upload"}:
+            audio = payload
+            filename = _clean_filename(part_filename or name or DEFAULT_AUDIO_FILENAME)
+            audio_content_type = str(part.get_content_type() or "application/octet-stream")
+            continue
+
+        if name:
+            fields[name] = _decode_form_value(payload, part.get_content_charset())
+
+    if audio is None:
+        raise HTTPException(status_code=400, detail="Audio upload field not found.")
+
+    return AudioUpload(audio=audio, filename=filename, content_type=audio_content_type, fields=fields)
+
+
+async def read_audio_upload(request: Request) -> AudioUpload:
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            if int(content_length) > MAX_AUDIO_UPLOAD_BYTES:
+                raise HTTPException(status_code=413, detail="Audio upload too large.")
+        except ValueError:
+            pass
+
+    body = await request.body()
+    if len(body) > MAX_AUDIO_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="Audio upload too large.")
+    if not body:
+        raise HTTPException(status_code=400, detail="Audio upload is empty.")
+
+    content_type = request.headers.get("content-type", "application/octet-stream")
+    if content_type.lower().startswith("multipart/form-data"):
+        return _parse_multipart_upload(content_type, body)
+
+    filename = _clean_filename(request.headers.get("x-filename") or request.query_params.get("filename"))
+    return AudioUpload(audio=body, filename=filename, content_type=content_type, fields={})
+
+
+@router.post("/stt/transcribe", summary="Transcrever áudio (o que você falou)")
+async def transcribe_audio(
+    request: Request,
+    provider: str = Query("groq_whisper"),
+    model: str | None = Query(None),
+    language: str | None = Query(None),
+    prompt: str | None = Query(None),
+    respond: bool = Query(False),
+) -> dict[str, Any]:
+    upload = await read_audio_upload(request)
+    provider_id = str(upload.fields.get("provider") or provider or stt_registry.DEFAULT_STT_PROVIDER).strip().lower()
+    if provider_id == "groq":
+        provider_id = "groq_whisper"
+    if provider_id not in stt_registry.SUPPORTED_STT_PROVIDERS:
+        raise HTTPException(status_code=400, detail=f"Unsupported STT provider: {provider_id}.")
+
+    selected_model = upload.fields.get("model") or model
+    selected_language = upload.fields.get("language") or language
+    selected_prompt = upload.fields.get("prompt") or prompt
+    should_respond = _field_bool(upload.fields, "respond", respond)
+    started_at = time.perf_counter()
+
+    try:
+        result = await asyncio.to_thread(
+            stt_registry.build_stt_provider(provider_id).transcribe_bytes,
+            upload.audio,
+            filename=upload.filename,
+            model=selected_model,
+            language=selected_language,
+            prompt=selected_prompt,
+        )
+    except STTConfigurationError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("[STT] Groq Whisper transcription failed.")
+        raise HTTPException(status_code=502, detail=f"Groq Whisper transcription failed: {exc}") from exc
+
+    assistant_payload: dict[str, Any] | None = None
+    if result.text:
+        append_terminal_event(
+            request.app.state.memory,
+            {
+                "kind": "user_text",
+                "source": "stt",
+                "displayText": result.text,
+                "status": "transcribed",
+                "metadata": {
+                    "provider": result.provider,
+                    "model": result.model,
+                    "language": result.language,
+                },
+            },
+        )
+        if should_respond:
+            assistant_payload = await _run_voice_text_response(request, upload.fields, result.text)
+    else:
+        append_terminal_event(
+            request.app.state.memory,
+            {
+                "kind": "system",
+                "source": "stt",
+                "displayText": f"Audio recebido sem transcricao util: {upload.filename} ({len(upload.audio)} bytes)",
+                "status": "filtered" if result.filtered else "empty",
+                "metadata": {
+                    "provider": result.provider,
+                    "model": result.model,
+                    "language": result.language,
+                    "contentType": upload.content_type,
+                    "filtered": result.filtered,
+                },
+            },
+        )
+
+    return {
+        "ok": True,
+        "provider": result.provider,
+        "model": result.model,
+        "language": result.language,
+        "text": result.text,
+        "rawText": result.raw_text,
+        "filtered": result.filtered,
+        "filename": upload.filename,
+        "contentType": upload.content_type,
+        "durationMs": round((time.perf_counter() - started_at) * 1000, 2),
+        "responded": bool(assistant_payload),
+        "assistantText": assistant_payload["text"] if assistant_payload else "",
+        "assistant": assistant_payload or None,
+    }
+
+
+@router.post("/text/respond", summary="Responder um texto pelo canal de voz")
+async def respond_to_voice_text(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
+    text = str(payload.get("text") or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Text is required.")
+
+    append_terminal_event(
+        request.app.state.memory,
+        {
+            "kind": "user_text",
+            "source": "operator",
+            "displayText": text,
+            "speechText": "",
+            "status": "manual",
+            "metadata": {"tts": False},
+        },
+    )
+    fields = {key: str(value) for key, value in payload.items() if value is not None}
+    assistant_payload = await _run_voice_text_response(request, fields, text)
+    connections = request.app.state.memory.get_setting("connections_config", {})
+    if bool(connections.get("tts")) and assistant_payload.get("text"):
+        runtime = _runtime(request)
+        await runtime.speak_text(str(assistant_payload["text"]))
+    return {
+        "ok": True,
+        "text": text,
+        "assistantText": assistant_payload["text"],
+        "responded": True,
+        "assistant": assistant_payload,
+    }
+
+
+@router.post("/tts/synthesize", summary="Gerar áudio de um texto (devolve o arquivo)")
+async def synthesize_voice_tts(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
+    # useChatTts=True (usado pelo Discord) le a voz da "TTS do Chat" (llm_config)
+    # em vez da voz do Terminal Agente (voice_config).
+    config = _chat_tts_config(request) if payload.get("useChatTts") else _voice_config(request)
+    provider_id = str(payload.get("provider") or config.get("ttsProvider") or tts_registry.DEFAULT_TTS_PROVIDER).strip().lower()
+    if provider_id not in tts_registry.SUPPORTED_TTS_PROVIDERS:
+        raise HTTPException(status_code=400, detail=f"Unsupported TTS provider: {provider_id}.")
+
+    text = sanitize_tts_text(
+        str(
+            payload.get("speechText")
+            or payload.get("speech_text")
+            or payload.get("ttsText")
+            or payload.get("tts_text")
+            or payload.get("text")
+            or ""
+        )
+    )
+    if not text:
+        raise HTTPException(status_code=400, detail="TTS text is empty.")
+
+    voice = str(payload.get("voice") or config.get("ttsVoice") or "").strip()
+    language = str(payload.get("language") or config.get("ttsLanguage") or "pt-BR").strip()
+    model = str(payload.get("model") or config.get("ttsModel") or "").strip()
+    speed = payload.get("speed", config.get("ttsSpeed", 1.0))
+    pitch = payload.get("pitch", config.get("ttsPitch", 0.0))
+    streaming = bool(payload.get("streaming", config.get("ttsStreaming", False)))
+    started_at = time.perf_counter()
+
+    try:
+        provider = tts_registry.build_tts_provider(
+            provider_id,
+            voice=voice,
+            model=model,
+            language=language,
+            speed=_float_or_default(speed, 1.0),
+            pitch=_float_or_default(pitch, 0.0),
+            stability=_float_or_default(payload.get("stability", config.get("ttsStability", 0.5)), 0.5),
+            similarity=_float_or_default(payload.get("similarity", config.get("ttsSimilarity", 0.75)), 0.75),
+            style=_float_or_default(payload.get("style", config.get("ttsStyle", 0.0)), 0.0),
+            speaker_boost=bool(payload.get("speakerBoost", config.get("ttsSpeakerBoost", True))),
+            latency=str(payload.get("latency") or config.get("ttsLatency") or "balanced"),
+        )
+        result = await provider.synthesize(text)
+    except TTSConfigurationError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("[TTS] Synthesis failed.")
+        raise HTTPException(status_code=502, detail=f"{provider_id} synthesis failed: {exc}") from exc
+
+    append_terminal_event(
+        request.app.state.memory,
+        {
+            "kind": "assistant_speech",
+            "source": "tts",
+            "displayText": f"TTS {result.provider} gerou audio: {result.voice}",
+            "speechText": "",
+            "status": "ready",
+            "metadata": {
+                "provider": result.provider,
+                "model": model,
+                "voice": result.voice,
+                "rate": result.rate,
+                "pitch": result.pitch,
+                "bytes": len(result.audio),
+                "streaming": streaming,
+                "tts": False,
+            },
+        },
+    )
+
+    return {
+        "ok": True,
+        "provider": result.provider,
+        "voice": result.voice,
+        "rate": result.rate,
+        "pitch": result.pitch,
+        "volume": result.volume,
+        "text": result.text,
+        "mimeType": result.mime_type,
+        "audioBase64": b64encode(result.audio).decode("ascii"),
+        "durationMs": round((time.perf_counter() - started_at) * 1000, 2),
+    }
+
+
+@router.post("/tts/speak", summary="Falar um texto no alto-falante")
+async def speak_voice_tts(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
+    text = sanitize_tts_text(
+        str(
+            payload.get("speechText")
+            or payload.get("speech_text")
+            or payload.get("ttsText")
+            or payload.get("tts_text")
+            or payload.get("text")
+            or ""
+        )
+    )
+    if not text:
+        raise HTTPException(status_code=400, detail="TTS text is empty.")
+
+    connections = request.app.state.memory.get_setting("connections_config", {})
+    if not bool(connections.get("tts")):
+        raise HTTPException(status_code=409, detail="TTS is disabled in Conexoes.")
+
+    runtime = _runtime(request)
+    runtime.apply_config(voice_config_with_connections(request.app.state.memory))
+    spoken = await runtime.speak_text(text)
+    if not spoken:
+        raise HTTPException(status_code=409, detail="TTS did not produce playable audio.")
+    return {"ok": spoken, "spoken": spoken, "text": text}
+
+
+@router.post("/tts/stop", summary="Calar a boca agora")
+async def stop_voice_tts(request: Request, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    reason = str((payload or {}).get("reason") or "voice_tts_stop")
+    request_global_stop(reason)
+    _runtime(request).interrupt(reason=reason, append_event=False)
+    set_speaking(False)
+    append_terminal_event(
+        request.app.state.memory,
+        {
+            "kind": "speaking",
+            "source": "tts",
+            "displayText": "TTS stop requested.",
+            "speechText": "",
+            "status": "stopped",
+            "metadata": {"tts": False, "reason": reason},
+        },
+    )
+    return {"status": "ok", "stopped": True, "reason": reason}
+
+
+@router.post("/runtime/start", summary="Ligar a escuta contínua")
+async def start_voice_runtime(request: Request, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    status = _sync_runtime_from_persisted_config(request, start_requested=True)
+    return {
+        "ok": True,
+        "started": bool(status.get("running")) and bool(status.get("config", {}).get("sttEnabled")),
+        "runtime": status,
+    }
+
+
+@router.post("/runtime/configure", summary="Aplicar config de voz sem religar")
+async def configure_voice_runtime(request: Request, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    status = _sync_runtime_from_persisted_config(request, start_requested=False)
+    return {"ok": True, "runtime": status}
+
+
+@router.post("/runtime/stop", summary="Desligar a escuta contínua")
+async def stop_voice_runtime(request: Request, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    reason = str((payload or {}).get("reason") or "user_request")
+    status = _runtime(request).stop(reason=reason)
+    return {"ok": True, "runtime": status}
+
+
+@router.get("/runtime/status", summary="A escuta está ligada?")
+async def voice_runtime_status(request: Request) -> dict[str, Any]:
+    return {"ok": True, "runtime": _runtime(request).status()}
+
+
+@router.post("/runtime/interrupt", summary="Interromper a fala e voltar a escutar")
+async def interrupt_voice_runtime(request: Request, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    reason = str((payload or {}).get("reason") or "user_request")
+    status = _runtime(request).interrupt(reason=reason)
+    return {"ok": True, "runtime": status}

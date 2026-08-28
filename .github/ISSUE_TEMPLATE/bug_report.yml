@@ -1,0 +1,78 @@
+name: Relatar um bug
+description: Informe um comportamento incorreto e reproduzível.
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Não inclua chaves, tokens, conversas privadas, bancos ou arquivos `.env`.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Área afetada
+      options:
+        - Backend/API
+        - Frontend/Tauri
+        - Chat ou memória
+        - Voz, STT ou TTS
+        - Discord
+        - Imagem ou visão
+        - MCP ou ferramentas locais
+        - Instalação
+        - Outra
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: O que aconteceu?
+      description: Explique o erro de forma curta.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Como reproduzir
+      description: Liste os passos mínimos para o problema aparecer.
+      placeholder: |
+        1. Abra...
+        2. Selecione...
+        3. Observe...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Resultado esperado
+    validations:
+      required: true
+
+  - type: input
+    id: environment
+    attributes:
+      label: Ambiente
+      description: Sistema operacional, versão da Hana e provider/modelo, quando relevante.
+      placeholder: Windows 11, commit atual, Groq/Qwen...
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidência sem dados privados
+      description: Cole apenas o trecho necessário do erro ou anexe uma captura segura.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Confirmações
+      options:
+        - label: Procurei uma issue semelhante antes de abrir esta.
+          required: true
+        - label: Removi chaves, tokens e dados pessoais da evidência.
+          required: true
+

@@ -1,0 +1,20 @@
+{
+  "catalog": "stt",
+  "version": 1,
+  "models": [
+    {
+      "provider": "groq_whisper",
+      "model_id": "whisper-large-v3",
+      "label": "Whisper Large v3",
+      "language": "pt",
+      "supports_prompt": true
+    },
+    {
+      "provider": "groq_whisper",
+      "model_id": "whisper-large-v3-turbo",
+      "label": "Whisper Large v3 Turbo",
+      "language": "pt",
+      "supports_prompt": true
+    }
+  ]
+}

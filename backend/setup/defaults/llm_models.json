@@ -1,0 +1,1984 @@
+{
+  "catalog": "llm",
+  "version": 1,
+  "models": [
+    {
+      "provider": "deepseek",
+      "model_id": "deepseek-v4-flash",
+      "label": "DeepSeek V4 Flash",
+      "supports_vision": false,
+      "supports_video": false,
+      "supports_tools": true,
+      "supports_streaming": true,
+      "supports_streaming_tools": true,
+      "supports_reasoning": null,
+      "reasoning_modes": null,
+      "supports_structured_output": null,
+      "supports_documents": false,
+      "supports_native_search": false,
+      "max_input_tokens": 1000000,
+      "max_output_tokens": 384000,
+      "free": false,
+      "pricing": {
+        "prompt": "0.00000014",
+        "completion": "0.00000028"
+      },
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "supported_parameters": [
+        "tools",
+        "tool_choice",
+        "response_format"
+      ],
+      "description": "DeepSeek-V4-Flash (versao DeepSeek-V4-Flash-0731), OpenAI-compatible, 1M de contexto, com function calling e JSON."
+    },
+    {
+      "provider": "deepseek",
+      "model_id": "deepseek-v4-flash-vision-exp",
+      "label": "DeepSeek V4 Flash Vision EXP",
+      "supports_vision": true,
+      "supports_video": false,
+      "supports_tools": true,
+      "supports_streaming": true,
+      "supports_streaming_tools": true,
+      "supports_reasoning": true,
+      "reasoning_modes": [
+        "low",
+        "high",
+        "max"
+      ],
+      "supports_structured_output": true,
+      "supports_documents": false,
+      "supports_native_search": false,
+      "max_input_tokens": 1000000,
+      "max_output_tokens": 384000,
+      "free": false,
+      "pricing": {
+        "prompt": "0.00000044",
+        "completion": "0.00000132"
+      },
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "supported_parameters": [
+        "tools",
+        "tool_choice",
+        "response_format"
+      ],
+      "description": "DeepSeek-V4-Flash-Vision-Exp, modelo experimental multimodal com 1M de contexto, imagens, function calling e JSON."
+    },
+    {
+      "provider": "deepseek",
+      "model_id": "deepseek-v4-pro",
+      "label": "DeepSeek V4 Pro",
+      "supports_vision": false,
+      "supports_video": false,
+      "supports_tools": true,
+      "supports_streaming": true,
+      "supports_streaming_tools": true,
+      "supports_reasoning": null,
+      "reasoning_modes": null,
+      "supports_structured_output": null,
+      "supports_documents": false,
+      "supports_native_search": false,
+      "max_input_tokens": 1000000,
+      "max_output_tokens": 384000,
+      "free": false,
+      "pricing": {
+        "prompt": "0.000000435",
+        "completion": "0.00000087"
+      },
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "supported_parameters": [
+        "tools",
+        "tool_choice",
+        "response_format"
+      ],
+      "description": "DeepSeek-V4-Pro, mais forte que o Flash, 1M de contexto, function calling e JSON."
+    },
+    {
+      "provider": "gemini_api",
+      "model_id": "gemini-2.5-flash",
+      "label": "Gemini 2.5 Flash",
+      "supports_vision": true,
+      "supports_video": true,
+      "supports_tools": true,
+      "supports_streaming": true,
+      "supports_streaming_tools": null,
+      "supports_reasoning": null,
+      "reasoning_modes": null,
+      "supports_structured_output": true,
+      "supports_documents": false,
+      "supports_native_search": true,
+      "max_input_tokens": 1048576,
+      "max_output_tokens": 65535,
+      "free": null,
+      "pricing": {
+        "prompt": "0.00000015",
+        "completion": "0.0000006"
+      },
+      "input_modalities": [
+        "text",
+        "code",
+        "image",
+        "audio",
+        "video"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "supported_parameters": [
+        "tools",
+        "tool_choice",
+        "response_format",
+        "temperature",
+        "top_p",
+        "max_tokens"
+      ],
+      "description": "Gemini 2.5 Flash - equilibrio entre custo e capacidade, multimodal com busca nativa."
+    },
+    {
+      "provider": "gemini_api",
+      "model_id": "gemini-2.5-flash-lite",
+      "label": "Gemini 2.5 Flash Lite",
+      "supports_vision": true,
+      "supports_video": true,
+      "supports_tools": true,
+      "supports_streaming": true,
+      "supports_streaming_tools": null,
+      "supports_reasoning": null,
+      "reasoning_modes": null,
+      "supports_structured_output": true,
+      "supports_documents": false,
+      "supports_native_search": true,
+      "max_input_tokens": 1048576,
+      "max_output_tokens": 65535,
+      "free": null,
+      "pricing": {
+        "prompt": "0.00000003",
+        "completion": "0.00000012"
+      },
+      "input_modalities": [
+        "text",
+        "code",
+        "image",
+        "audio",
+        "video"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "supported_parameters": [
+        "tools",
+        "tool_choice",
+        "response_format",
+        "temperature",
+        "top_p",
+        "max_tokens"
+      ],
+      "description": "Gemini 2.5 Flash Lite - custo minimo, bom para tarefas simples com entrada multimodal."
+    },
+    {
+      "provider": "gemini_api",
+      "model_id": "gemini-2.5-pro",
+      "label": "Gemini 2.5 Pro",
+      "supports_vision": true,
+      "supports_video": true,
+      "supports_tools": true,
+      "supports_streaming": true,
+      "supports_streaming_tools": null,
+      "supports_reasoning": null,
+      "reasoning_modes": null,
+      "supports_structured_output": true,
+      "supports_documents": false,
+      "supports_native_search": true,
+      "max_input_tokens": 1048576,
+      "max_output_tokens": 65535,
+      "free": null,
+      "pricing": {
+        "prompt": "0.00000125",
+        "completion": "0.000010"
+      },
+      "input_modalities": [
+        "text",
+        "code",
+        "image",
+        "audio",
+        "video"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "supported_parameters": [
+        "tools",
+        "tool_choice",
+        "response_format",
+        "temperature",
+        "top_p",
+        "max_tokens"
+      ],
+      "description": "Gemini 2.5 Pro - raciocinio profundo, ate 1M contexto, code execution e funcao nativa de busca."
+    },
+    {
+      "provider": "gemini_api",
+      "model_id": "gemini-3-flash-preview",
+      "label": "Gemini 3 Flash Preview",
+      "supports_vision": true,
+      "supports_video": true,
+      "supports_tools": true,
+      "supports_streaming": true,
+      "supports_streaming_tools": null,
+      "supports_reasoning": null,
+      "reasoning_modes": null,
+      "supports_structured_output": true,
+      "supports_documents": true,
+      "supports_native_search": true,
+      "max_input_tokens": 1048576,
+      "max_output_tokens": 65536,
+      "free": null,
+      "pricing": {
+        "prompt": "0.00000008",
+        "completion": "0.0000003"
+      },
+      "input_modalities": [
+        "text",
+        "code",
+        "image",
+        "audio",
+        "video",
+        "pdf"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "supported_parameters": [
+        "tools",
+        "tool_choice",
+        "response_format",
+        "temperature",
+        "top_p",
+        "max_tokens"
+      ],
+      "description": "Gemini 3 Flash Preview - preview rapido da linha 3, multimodal com busca nativa."
+    },
+    {
+      "provider": "gemini_api",
+      "model_id": "gemini-3.1-flash-lite",
+      "label": "Gemini 3.1 Flash Lite",
+      "supports_vision": true,
+      "supports_video": true,
+      "supports_tools": true,
+      "supports_streaming": true,
+      "supports_streaming_tools": null,
+      "supports_reasoning": null,
+      "reasoning_modes": null,
+      "supports_structured_output": true,
+      "supports_documents": true,
+      "supports_native_search": true,
+      "max_input_tokens": 1048576,
+      "max_output_tokens": 65535,
+      "free": null,
+      "pricing": {
+        "prompt": "0.00000003",
+        "completion": "0.00000012"
+      },
+      "input_modalities": [
+        "text",
+        "code",
+        "image",
+        "audio",
+        "video",
+        "pdf"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "supported_parameters": [
+        "tools",
+        "tool_choice",
+        "response_format",
+        "temperature",
+        "top_p",
+        "max_tokens"
+      ],
+      "description": "Gemini 3.1 Flash Lite - mais barato da linha 3, optimizado para baixa latencia."
+    },
+    {
+      "provider": "gemini_api",
+      "model_id": "gemini-3.1-pro-preview",
+      "label": "Gemini 3.1 Pro Preview",
+      "supports_vision": true,
+      "supports_video": true,
+      "supports_tools": true,
+      "supports_streaming": true,
+      "supports_streaming_tools": null,
+      "supports_reasoning": null,
+      "reasoning_modes": null,
+      "supports_structured_output": true,
+      "supports_documents": true,
+      "supports_native_search": true,
+      "max_input_tokens": 1048576,
+      "max_output_tokens": 65536,
+      "free": null,
+      "pricing": {
+        "prompt": "0.00000125",
+        "completion": "0.000005"
+      },
+      "input_modalities": [
+        "text",
+        "code",
+        "image",
+        "audio",
+        "video",
+        "pdf"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "supported_parameters": [
+        "tools",
+        "tool_choice",
+        "response_format",
+        "temperature",
+        "top_p",
+        "max_tokens"
+      ],
+      "description": "Gemini 3.1 Pro Preview - multimodal, 1M contexto, busca nativa Google, code execution e function calling."
+    },
+    {
+      "provider": "gemini_api",
+      "model_id": "gemini-3.5-flash",
+      "label": "Gemini 3.5 Flash",
+      "supports_vision": true,
+      "supports_video": true,
+      "supports_tools": true,
+      "supports_streaming": true,
+      "supports_streaming_tools": null,
+      "supports_reasoning": null,
+      "reasoning_modes": null,
+      "supports_structured_output": true,
+      "supports_documents": true,
+      "supports_native_search": true,
+      "max_input_tokens": 1048576,
+      "max_output_tokens": 65536,
+      "free": null,
+      "pricing": {
+        "prompt": "0.00000015",
+        "completion": "0.0000006"
+      },
+      "input_modalities": [
+        "text",
+        "code",
+        "image",
+        "audio",
+        "video",
+        "pdf"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "supported_parameters": [
+        "tools",
+        "tool_choice",
+        "response_format",
+        "temperature",
+        "top_p",
+        "max_tokens"
+      ],
+      "description": "Gemini 3.5 Flash - rapido, barato, multimodal com busca nativa Google."
+    },
+    {
+      "provider": "groq",
+      "model_id": "groq/compound",
+      "label": "Compound",
+      "supports_vision": false,
+      "supports_video": false,
+      "supports_tools": false,
+      "supports_streaming": true,
+      "supports_streaming_tools": false,
+      "supports_reasoning": null,
+      "reasoning_modes": null,
+      "supports_structured_output": null,
+      "supports_documents": false,
+      "supports_native_search": true,
+      "max_input_tokens": 131072,
+      "max_output_tokens": 8192,
+      "free": false,
+      "pricing": null,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "supported_parameters": [],
+      "description": "Groq compound system with server-side web search and code execution."
+    },
+    {
+      "provider": "groq",
+      "model_id": "groq/compound-mini",
+      "label": "Compound Mini",
+      "supports_vision": false,
+      "supports_video": false,
+      "supports_tools": false,
+      "supports_streaming": true,
+      "supports_streaming_tools": false,
+      "supports_reasoning": null,
+      "reasoning_modes": null,
+      "supports_structured_output": null,
+      "supports_documents": false,
+      "supports_native_search": true,
+      "max_input_tokens": 131072,
+      "max_output_tokens": 8192,
+      "free": false,
+      "pricing": null,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "supported_parameters": [],
+      "description": "Lower-latency Groq compound system with one server-side tool call."
+    },
+    {
+      "provider": "groq",
+      "model_id": "llama-3.1-8b-instant",
+      "label": "Llama 3.1 8B Instant",
+      "supports_vision": false,
+      "supports_video": false,
+      "supports_tools": false,
+      "supports_streaming": true,
+      "supports_streaming_tools": false,
+      "supports_reasoning": null,
+      "reasoning_modes": null,
+      "supports_structured_output": null,
+      "supports_documents": false,
+      "supports_native_search": false,
+      "max_input_tokens": 131072,
+      "max_output_tokens": 131072,
+      "free": false,
+      "pricing": {
+        "prompt": "0.00000005",
+        "completion": "0.00000008"
+      },
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "supported_parameters": [],
+      "description": "Low-cost Groq text model."
+    },
+    {
+      "provider": "groq",
+      "model_id": "llama-3.3-70b-versatile",
+      "label": "Llama 3.3 70B",
+      "supports_vision": false,
+      "supports_video": false,
+      "supports_tools": false,
+      "supports_streaming": true,
+      "supports_streaming_tools": false,
+      "supports_reasoning": null,
+      "reasoning_modes": null,
+      "supports_structured_output": null,
+      "supports_documents": false,
+      "supports_native_search": false,
+      "max_input_tokens": 131072,
+      "max_output_tokens": 32768,
+      "free": false,
+      "pricing": {
+        "prompt": "0.00000059",
+        "completion": "0.00000079"
+      },
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "supported_parameters": [],
+      "description": "Groq production multilingual text model."
+    },
+    {
+      "provider": "groq",
+      "model_id": "meta-llama/llama-4-scout-17b-16e-instruct",
+      "label": "Llama 4 Scout 17B 16E",
+      "supports_vision": true,
+      "supports_video": false,
+      "supports_tools": true,
+      "supports_streaming": true,
+      "supports_streaming_tools": true,
+      "supports_reasoning": null,
+      "reasoning_modes": null,
+      "supports_structured_output": null,
+      "supports_documents": false,
+      "supports_native_search": false,
+      "max_input_tokens": 131072,
+      "max_output_tokens": 8192,
+      "free": false,
+      "pricing": {
+        "prompt": "0.00000011",
+        "completion": "0.00000034"
+      },
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "supported_parameters": [
+        "tools",
+        "tool_choice"
+      ],
+      "description": "Groq preview vision model for text and image input."
+    },
+    {
+      "provider": "groq",
+      "model_id": "openai/gpt-oss-120b",
+      "label": "GPT OSS 120B",
+      "supports_vision": false,
+      "supports_video": false,
+      "supports_tools": true,
+      "supports_streaming": true,
+      "supports_streaming_tools": true,
+      "supports_reasoning": null,
+      "reasoning_modes": null,
+      "supports_structured_output": null,
+      "supports_documents": false,
+      "supports_native_search": false,
+      "max_input_tokens": 131072,
+      "max_output_tokens": 65536,
+      "free": false,
+      "pricing": {
+        "prompt": "0.00000015",
+        "completion": "0.0000006"
+      },
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "supported_parameters": [
+        "tools",
+        "tool_choice"
+      ],
+      "description": "Groq reasoning/text model with function calling support."
+    },
+    {
+      "provider": "groq",
+      "model_id": "openai/gpt-oss-20b",
+      "label": "GPT OSS 20B",
+      "supports_vision": false,
+      "supports_video": false,
+      "supports_tools": true,
+      "supports_streaming": true,
+      "supports_streaming_tools": true,
+      "supports_reasoning": null,
+      "reasoning_modes": null,
+      "supports_structured_output": null,
+      "supports_documents": false,
+      "supports_native_search": false,
+      "max_input_tokens": 131072,
+      "max_output_tokens": 65536,
+      "free": false,
+      "pricing": {
+        "prompt": "0.000000075",
+        "completion": "0.0000003"
+      },
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "supported_parameters": [
+        "tools",
+        "tool_choice"
+      ],
+      "description": "Fast Groq reasoning/text model with function calling support."
+    },
+    {
+      "provider": "groq",
+      "model_id": "qwen/qwen3-32b",
+      "label": "Qwen3 32B",
+      "supports_vision": false,
+      "supports_video": false,
+      "supports_tools": true,
+      "supports_streaming": true,
+      "supports_streaming_tools": true,
+      "supports_reasoning": null,
+      "reasoning_modes": null,
+      "supports_structured_output": null,
+      "supports_documents": false,
+      "supports_native_search": false,
+      "max_input_tokens": 131072,
+      "max_output_tokens": 40960,
+      "free": false,
+      "pricing": {
+        "prompt": "0.00000029",
+        "completion": "0.00000059"
+      },
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "supported_parameters": [
+        "tools",
+        "tool_choice"
+      ],
+      "description": "Preview Groq text/reasoning model."
+    },
+    {
+      "provider": "groq",
+      "model_id": "qwen/qwen3.6-27b",
+      "label": "Qwen3.6 27B (visão)",
+      "supports_vision": true,
+      "supports_video": false,
+      "supports_tools": true,
+      "supports_streaming": true,
+      "supports_streaming_tools": true,
+      "supports_reasoning": null,
+      "reasoning_modes": null,
+      "supports_structured_output": null,
+      "supports_documents": false,
+      "supports_native_search": false,
+      "max_input_tokens": 131072,
+      "max_output_tokens": 32768,
+      "free": false,
+      "pricing": null,
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "supported_parameters": [
+        "tools",
+        "tool_choice"
+      ],
+      "description": "Groq Qwen3.6 27B: reasoning + visão (texto e imagem) com function calling."
+    },
+    {
+      "provider": "maritaca",
+      "model_id": "sabia-4",
+      "label": "Sabia 4",
+      "supports_vision": false,
+      "supports_video": false,
+      "supports_tools": true,
+      "supports_streaming": true,
+      "supports_streaming_tools": null,
+      "supports_reasoning": false,
+      "reasoning_modes": null,
+      "supports_structured_output": null,
+      "supports_documents": false,
+      "supports_native_search": false,
+      "max_input_tokens": 128000,
+      "max_output_tokens": 32000,
+      "free": false,
+      "pricing": {
+        "prompt": "0.000005",
+        "completion": "0.00002"
+      },
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "supported_parameters": [
+        "tools",
+        "tool_choice"
+      ],
+      "description": "Generalista foco em portugues/BR, boa capacidade agentica (tools). Preco em R$."
+    },
+    {
+      "provider": "maritaca",
+      "model_id": "sabia-4-br-sp",
+      "label": "Sabia 4 (regiao BR-SP)",
+      "supports_vision": false,
+      "supports_video": false,
+      "supports_tools": true,
+      "supports_streaming": true,
+      "supports_streaming_tools": null,
+      "supports_reasoning": false,
+      "reasoning_modes": null,
+      "supports_structured_output": null,
+      "supports_documents": false,
+      "supports_native_search": false,
+      "max_input_tokens": 128000,
+      "max_output_tokens": 32000,
+      "free": false,
+      "pricing": {
+        "prompt": "0.000005",
+        "completion": "0.00002"
+      },
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "supported_parameters": [
+        "tools",
+        "tool_choice"
+      ],
+      "description": "Mesmo Sabia 4, hospedado na regiao BR-SP (dado residente no Brasil). Preco em R$."
+    },
+    {
+      "provider": "maritaca",
+      "model_id": "sabia-4-thinking",
+      "label": "Sabia 4 Thinking",
+      "supports_vision": false,
+      "supports_video": false,
+      "supports_tools": true,
+      "supports_streaming": true,
+      "supports_streaming_tools": null,
+      "supports_reasoning": true,
+      "reasoning_modes": null,
+      "supports_structured_output": null,
+      "supports_documents": false,
+      "supports_native_search": false,
+      "max_input_tokens": 128000,
+      "max_output_tokens": 32000,
+      "free": false,
+      "pricing": {
+        "prompt": "0.000005",
+        "completion": "0.00004"
+      },
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "supported_parameters": [
+        "tools",
+        "tool_choice"
+      ],
+      "description": "Modelo de raciocinio dedicado (sempre pensa, sem toggle). Melhor p/ tarefas complexas. Preco em R$."
+    },
+    {
+      "provider": "maritaca",
+      "model_id": "sabia-4-thinking-br-sp",
+      "label": "Sabia 4 Thinking (regiao BR-SP)",
+      "supports_vision": false,
+      "supports_video": false,
+      "supports_tools": true,
+      "supports_streaming": true,
+      "supports_streaming_tools": null,
+      "supports_reasoning": true,
+      "reasoning_modes": null,
+      "supports_structured_output": null,
+      "supports_documents": false,
+      "supports_native_search": false,
+      "max_input_tokens": 128000,
+      "max_output_tokens": 32000,
+      "free": false,
+      "pricing": {
+        "prompt": "0.000005",
+        "completion": "0.00004"
+      },
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "supported_parameters": [
+        "tools",
+        "tool_choice"
+      ],
+      "description": "Mesmo Sabia 4 Thinking, hospedado na regiao BR-SP. Preco em R$."
+    },
+    {
+      "provider": "maritaca",
+      "model_id": "sabiazinho-4",
+      "label": "Sabiazinho 4",
+      "supports_vision": false,
+      "supports_video": false,
+      "supports_tools": true,
+      "supports_streaming": true,
+      "supports_streaming_tools": null,
+      "supports_reasoning": false,
+      "reasoning_modes": null,
+      "supports_structured_output": null,
+      "supports_documents": false,
+      "supports_native_search": false,
+      "max_input_tokens": 128000,
+      "max_output_tokens": 32000,
+      "free": false,
+      "pricing": {
+        "prompt": "0.000001",
+        "completion": "0.000004"
+      },
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "supported_parameters": [
+        "tools",
+        "tool_choice"
+      ],
+      "description": "Rapido e barato, otimizado pra escala. Boa opcao padrao de baixo custo. Preco em R$."
+    },
+    {
+      "provider": "maritaca",
+      "model_id": "sabiazinho-4-br-sp",
+      "label": "Sabiazinho 4 (regiao BR-SP)",
+      "supports_vision": false,
+      "supports_video": false,
+      "supports_tools": true,
+      "supports_streaming": true,
+      "supports_streaming_tools": null,
+      "supports_reasoning": false,
+      "reasoning_modes": null,
+      "supports_structured_output": null,
+      "supports_documents": false,
+      "supports_native_search": false,
+      "max_input_tokens": 128000,
+      "max_output_tokens": 32000,
+      "free": false,
+      "pricing": {
+        "prompt": "0.000001",
+        "completion": "0.000004"
+      },
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "supported_parameters": [
+        "tools",
+        "tool_choice"
+      ],
+      "description": "Mesmo Sabiazinho 4, hospedado na regiao BR-SP. Preco em R$."
+    },
+    {
+      "provider": "qwen",
+      "model_id": "deepseek-v4-pro",
+      "label": "DeepSeek V4 Pro — Virgínia e Singapura",
+      "supports_vision": false,
+      "supports_tools": true,
+      "supports_streaming": true,
+      "supports_streaming_tools": true,
+      "supports_reasoning": true,
+      "reasoning_modes": ["high", "max"],
+      "supports_structured_output": true,
+      "max_input_tokens": 1000000,
+      "max_output_tokens": 393216,
+      "free": false,
+      "pricing": {"prompt": "0.00000165", "completion": "0.0000033"},
+      "input_modalities": ["text"],
+      "output_modalities": ["text"],
+      "supported_parameters": ["tools", "tool_choice"],
+      "description": "DeepSeek V4 Pro hospedado no Alibaba Cloud, escopo Global disponivel pela Virginia."
+    },
+    {
+      "provider": "qwen",
+      "model_id": "deepseek-v4-pro-us",
+      "label": "DeepSeek V4 Pro US — Virgínia",
+      "supports_vision": false,
+      "supports_tools": true,
+      "supports_streaming": true,
+      "supports_streaming_tools": true,
+      "supports_reasoning": true,
+      "reasoning_modes": ["high", "max"],
+      "supports_structured_output": true,
+      "max_input_tokens": 1000000,
+      "max_output_tokens": 393216,
+      "free": false,
+      "pricing": {"prompt": "0.0000024", "completion": "0.0000048"},
+      "input_modalities": ["text"],
+      "output_modalities": ["text"],
+      "supported_parameters": ["tools", "tool_choice"],
+      "description": "DeepSeek V4 Pro hospedado no Alibaba Cloud, variante Internacional US."
+    },
+    {
+      "provider": "qwen",
+      "model_id": "deepseek-v4-flash",
+      "label": "DeepSeek V4 Flash — Virgínia e Singapura",
+      "supports_vision": false,
+      "supports_tools": true,
+      "supports_streaming": true,
+      "supports_streaming_tools": true,
+      "supports_reasoning": true,
+      "reasoning_modes": ["high", "max"],
+      "supports_structured_output": true,
+      "max_input_tokens": 1000000,
+      "max_output_tokens": 393216,
+      "free": false,
+      "pricing": {"prompt": "0.000000138", "completion": "0.000000275"},
+      "input_modalities": ["text"],
+      "output_modalities": ["text"],
+      "supported_parameters": ["tools", "tool_choice"],
+      "description": "DeepSeek V4 Flash hospedado no Alibaba Cloud, escopo Global disponivel pela Virginia."
+    },
+    {
+      "provider": "qwen",
+      "model_id": "deepseek-v4-flash-us",
+      "label": "DeepSeek V4 Flash US — Virgínia",
+      "supports_vision": false,
+      "supports_tools": true,
+      "supports_streaming": true,
+      "supports_streaming_tools": true,
+      "supports_reasoning": true,
+      "reasoning_modes": ["high", "max"],
+      "supports_structured_output": true,
+      "max_input_tokens": 1000000,
+      "max_output_tokens": 393216,
+      "free": false,
+      "pricing": {"prompt": "0.0000002", "completion": "0.0000004"},
+      "input_modalities": ["text"],
+      "output_modalities": ["text"],
+      "supported_parameters": ["tools", "tool_choice"],
+      "description": "DeepSeek V4 Flash hospedado no Alibaba Cloud, variante Internacional US."
+    },
+    {
+      "provider": "qwen",
+      "model_id": "deepseek-v3.2",
+      "label": "DeepSeek V3.2 — Singapura",
+      "supports_vision": false,
+      "supports_video": false,
+      "supports_tools": true,
+      "supports_streaming": true,
+      "supports_streaming_tools": true,
+      "supports_reasoning": null,
+      "reasoning_modes": null,
+      "supports_structured_output": false,
+      "supports_documents": false,
+      "supports_native_search": false,
+      "max_input_tokens": 131072,
+      "max_output_tokens": 65536,
+      "free": null,
+      "pricing": {
+        "prompt": "0.00000057",
+        "completion": "0.00000171"
+      },
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "supported_parameters": [
+        "tools",
+        "tool_choice"
+      ],
+      "description": "DeepSeek V3.2 - contexto 128K, pensamento (budget 32K), function calling."
+    },
+    {
+      "provider": "qwen",
+      "model_id": "deepseek-v4-flash-0731",
+      "label": "DeepSeek V4 Flash 0731 — Virgínia e Singapura",
+      "supports_vision": false,
+      "supports_video": false,
+      "supports_tools": true,
+      "supports_streaming": true,
+      "supports_streaming_tools": true,
+      "supports_reasoning": null,
+      "reasoning_modes": null,
+      "supports_structured_output": false,
+      "supports_documents": false,
+      "supports_native_search": false,
+      "max_input_tokens": 1000000,
+      "max_output_tokens": 384000,
+      "free": null,
+      "pricing": {
+        "prompt": "0.0000002",
+        "completion": "0.0000004"
+      },
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "supported_parameters": [
+        "tools",
+        "tool_choice"
+      ],
+      "description": "DeepSeek V4 Flash 0731 - snapshot atual do V4 Flash, pensamento default, function calling."
+    },
+    {
+      "provider": "qwen",
+      "model_id": "qwen-flash",
+      "label": "Qwen Flash — Virgínia e Singapura",
+      "supports_vision": false,
+      "supports_video": false,
+      "supports_tools": true,
+      "supports_streaming": true,
+      "supports_streaming_tools": true,
+      "supports_reasoning": null,
+      "reasoning_modes": null,
+      "supports_structured_output": null,
+      "supports_documents": false,
+      "supports_native_search": null,
+      "max_input_tokens": 1000000,
+      "max_output_tokens": null,
+      "free": false,
+      "pricing": {
+        "prompt": [
+          {
+            "until": 256000,
+            "price": "0.00000005"
+          },
+          {
+            "until": null,
+            "price": "0.00000025"
+          }
+        ],
+        "completion": [
+          {
+            "until": 256000,
+            "price": "0.0000004"
+          },
+          {
+            "until": null,
+            "price": "0.000002"
+          }
+        ]
+      },
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "supported_parameters": [
+        "tools",
+        "tool_choice"
+      ],
+      "description": "Alias estavel, sempre aponta pro Flash mais recente. Prefira pinar versao."
+    },
+    {
+      "provider": "qwen",
+      "model_id": "qwen-image-2.0-pro",
+      "label": "Qwen Image 2.0 Pro",
+      "model_domain": "image",
+      "supports_vision": false,
+      "supports_video": false,
+      "supports_tools": false,
+      "supports_streaming": false,
+      "supports_streaming_tools": null,
+      "supports_reasoning": null,
+      "reasoning_modes": null,
+      "supports_structured_output": false,
+      "supports_documents": false,
+      "supports_native_search": false,
+      "max_input_tokens": null,
+      "max_output_tokens": null,
+      "free": null,
+      "pricing": null,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "image"
+      ],
+      "supported_parameters": [],
+      "description": "Qwen Image 2.0 Pro - geracao/edicao multimodal de imagens."
+    },
+    {
+      "provider": "qwen",
+      "model_id": "qwen-long",
+      "label": "Qwen Long",
+      "supports_vision": false,
+      "supports_video": false,
+      "supports_tools": true,
+      "supports_streaming": true,
+      "supports_streaming_tools": null,
+      "supports_reasoning": null,
+      "reasoning_modes": null,
+      "supports_structured_output": null,
+      "supports_documents": false,
+      "supports_native_search": null,
+      "max_input_tokens": 10000000,
+      "max_output_tokens": null,
+      "free": false,
+      "pricing": null,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "supported_parameters": [
+        "tools",
+        "tool_choice"
+      ],
+      "description": "Contexto de 10M tokens. Preco nao divulgado (N/D) no doc fonte."
+    },
+    {
+      "provider": "qwen",
+      "model_id": "qwen-plus",
+      "label": "Qwen Plus — Virgínia e Singapura",
+      "supports_vision": false,
+      "supports_video": false,
+      "supports_tools": true,
+      "supports_streaming": true,
+      "supports_streaming_tools": true,
+      "supports_reasoning": null,
+      "reasoning_modes": null,
+      "supports_structured_output": null,
+      "supports_documents": false,
+      "supports_native_search": null,
+      "max_input_tokens": 1000000,
+      "max_output_tokens": null,
+      "free": false,
+      "pricing": {
+        "prompt": [
+          {
+            "until": 256000,
+            "price": "0.0000004"
+          },
+          {
+            "until": null,
+            "price": "0.0000012"
+          }
+        ],
+        "completion": [
+          {
+            "until": 256000,
+            "price": "0.000004"
+          },
+          {
+            "until": null,
+            "price": "0.000012"
+          }
+        ]
+      },
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "supported_parameters": [
+        "tools",
+        "tool_choice"
+      ],
+      "description": "Alias estavel, sempre aponta pro Plus mais recente. Prefira pinar versao."
+    },
+    {
+      "provider": "qwen",
+      "model_id": "qwen3-rerank",
+      "label": "Qwen3 Rerank",
+      "model_domain": "rerank",
+      "supports_vision": false,
+      "supports_video": false,
+      "supports_tools": false,
+      "supports_streaming": false,
+      "supports_streaming_tools": null,
+      "supports_reasoning": null,
+      "reasoning_modes": null,
+      "supports_structured_output": false,
+      "supports_documents": false,
+      "supports_native_search": false,
+      "max_input_tokens": null,
+      "max_output_tokens": null,
+      "free": null,
+      "pricing": {
+        "prompt": "0.0000001",
+        "completion": "0"
+      },
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "supported_parameters": [],
+      "description": "Qwen3 Rerank - reranking de texto."
+    },
+    {
+      "provider": "qwen",
+      "model_id": "qwen3-vl-flash",
+      "label": "Qwen3 VL Flash — Virgínia e Singapura",
+      "supports_vision": true,
+      "supports_video": true,
+      "supports_tools": false,
+      "supports_streaming": true,
+      "supports_streaming_tools": null,
+      "supports_reasoning": null,
+      "reasoning_modes": null,
+      "supports_structured_output": false,
+      "supports_documents": false,
+      "supports_native_search": false,
+      "max_input_tokens": 262144,
+      "max_output_tokens": null,
+      "free": null,
+      "pricing": {
+        "prompt": [
+          {
+            "until": 32000,
+            "price": "0.00000005"
+          },
+          {
+            "until": 128000,
+            "price": "0.000000075"
+          },
+          {
+            "until": null,
+            "price": "0.00000012"
+          }
+        ],
+        "completion": [
+          {
+            "until": 32000,
+            "price": "0.0000004"
+          },
+          {
+            "until": 128000,
+            "price": "0.0000006"
+          },
+          {
+            "until": null,
+            "price": "0.00000096"
+          }
+        ]
+      },
+      "input_modalities": [
+        "text",
+        "image",
+        "video"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "supported_parameters": [],
+      "description": "Qwen3 VL Flash - visao-linguagem rapido e barato, contexto 256K."
+    },
+    {
+      "provider": "qwen",
+      "model_id": "qwen3-vl-plus",
+      "label": "Qwen3 VL Plus — Virgínia e Singapura",
+      "supports_vision": true,
+      "supports_video": true,
+      "supports_tools": false,
+      "supports_streaming": true,
+      "supports_streaming_tools": null,
+      "supports_reasoning": null,
+      "reasoning_modes": null,
+      "supports_structured_output": false,
+      "supports_documents": false,
+      "supports_native_search": false,
+      "max_input_tokens": 262144,
+      "max_output_tokens": null,
+      "free": null,
+      "pricing": {
+        "prompt": [
+          {
+            "until": 32000,
+            "price": "0.0000002"
+          },
+          {
+            "until": 128000,
+            "price": "0.0000003"
+          },
+          {
+            "until": null,
+            "price": "0.0000006"
+          }
+        ],
+        "completion": [
+          {
+            "until": 32000,
+            "price": "0.0000016"
+          },
+          {
+            "until": 128000,
+            "price": "0.0000024"
+          },
+          {
+            "until": null,
+            "price": "0.0000048"
+          }
+        ]
+      },
+      "input_modalities": [
+        "text",
+        "image",
+        "video"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "supported_parameters": [],
+      "description": "Qwen3 VL Plus - visao-linguagem (imagem/video para texto), contexto 256K."
+    },
+    {
+      "provider": "qwen",
+      "model_id": "qwen3.5-flash",
+      "label": "Qwen3.5 Flash — Virgínia e Singapura",
+      "supports_vision": true,
+      "supports_video": null,
+      "supports_tools": true,
+      "supports_streaming": true,
+      "supports_streaming_tools": true,
+      "supports_reasoning": true,
+      "reasoning_modes": null,
+      "supports_structured_output": null,
+      "supports_documents": false,
+      "supports_native_search": null,
+      "max_input_tokens": 1000000,
+      "max_output_tokens": null,
+      "free": false,
+      "pricing": {
+        "prompt": [
+          {
+            "until": null,
+            "price": "0.0000001"
+          }
+        ],
+        "completion": [
+          {
+            "until": null,
+            "price": "0.0000004"
+          }
+        ]
+      },
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "supported_parameters": [
+        "tools",
+        "tool_choice"
+      ],
+      "description": "Qwen3.5 Flash - visao multimodal, preco fixo."
+    },
+    {
+      "provider": "qwen",
+      "model_id": "qwen3.5-omni-plus",
+      "label": "Qwen3.5 Omni Plus — Singapura",
+      "supports_vision": true,
+      "supports_video": true,
+      "supports_tools": false,
+      "supports_streaming": true,
+      "supports_streaming_tools": null,
+      "supports_reasoning": null,
+      "reasoning_modes": null,
+      "supports_structured_output": false,
+      "supports_documents": false,
+      "supports_native_search": false,
+      "max_input_tokens": null,
+      "max_output_tokens": null,
+      "free": null,
+      "pricing": {
+        "prompt": "0.0000014",
+        "completion": "0.0000083"
+      },
+      "input_modalities": [
+        "text",
+        "image",
+        "audio",
+        "video"
+      ],
+      "output_modalities": [
+        "text",
+        "audio"
+      ],
+      "supported_parameters": [],
+      "description": "Qwen3.5 Omni Plus - multimodal (texto, imagem, audio, video) com saida de audio."
+    },
+    {
+      "provider": "qwen",
+      "model_id": "qwen3.5-omni-plus-realtime",
+      "label": "Qwen3.5 Omni Plus Realtime — Singapura",
+      "supports_vision": true,
+      "supports_video": true,
+      "supports_tools": false,
+      "supports_streaming": true,
+      "supports_streaming_tools": null,
+      "supports_reasoning": null,
+      "reasoning_modes": null,
+      "supports_structured_output": false,
+      "supports_documents": false,
+      "supports_native_search": false,
+      "max_input_tokens": null,
+      "max_output_tokens": null,
+      "free": null,
+      "pricing": {
+        "prompt": "0.0000021",
+        "completion": "0.0000124"
+      },
+      "input_modalities": [
+        "text",
+        "image",
+        "audio",
+        "video"
+      ],
+      "output_modalities": [
+        "text",
+        "audio"
+      ],
+      "supported_parameters": [],
+      "description": "Qwen3.5 Omni Plus Realtime - tempo real (WebSocket), fala-fala e video."
+    },
+    {
+      "provider": "qwen",
+      "model_id": "qwen3.5-plus",
+      "label": "Qwen3.5 Plus — Virgínia e Singapura",
+      "supports_vision": true,
+      "supports_video": null,
+      "supports_tools": true,
+      "supports_streaming": true,
+      "supports_streaming_tools": true,
+      "supports_reasoning": true,
+      "reasoning_modes": null,
+      "supports_structured_output": null,
+      "supports_documents": false,
+      "supports_native_search": null,
+      "max_input_tokens": 1000000,
+      "max_output_tokens": null,
+      "free": false,
+      "pricing": {
+        "prompt": [
+          {
+            "until": 256000,
+            "price": "0.0000004"
+          },
+          {
+            "until": null,
+            "price": "0.0000005"
+          }
+        ],
+        "completion": [
+          {
+            "until": 256000,
+            "price": "0.0000024"
+          },
+          {
+            "until": null,
+            "price": "0.000003"
+          }
+        ]
+      },
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "supported_parameters": [
+        "tools",
+        "tool_choice"
+      ],
+      "description": "Qwen3.5 Plus - visao multimodal, preco por faixa."
+    },
+    {
+      "provider": "qwen",
+      "model_id": "qwen3.6-35b-a3b",
+      "label": "Qwen3.6 35B A3B — Virgínia e Singapura",
+      "supports_vision": true,
+      "supports_video": true,
+      "supports_tools": true,
+      "supports_streaming": true,
+      "supports_streaming_tools": true,
+      "supports_reasoning": null,
+      "reasoning_modes": null,
+      "supports_structured_output": true,
+      "supports_documents": false,
+      "supports_native_search": true,
+      "max_input_tokens": 260096,
+      "max_output_tokens": 65536,
+      "free": false,
+      "pricing": {
+        "prompt": "0.000000375",
+        "completion": "0.00000225"
+      },
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "supported_parameters": [
+        "tools",
+        "tool_choice"
+      ],
+      "description": ""
+    },
+    {
+      "provider": "qwen",
+      "model_id": "qwen3.6-flash",
+      "label": "Qwen3.6 Flash — Virgínia e Singapura",
+      "supports_vision": true,
+      "supports_video": true,
+      "supports_tools": true,
+      "supports_streaming": true,
+      "supports_streaming_tools": true,
+      "supports_reasoning": true,
+      "reasoning_modes": null,
+      "supports_structured_output": null,
+      "supports_documents": false,
+      "supports_native_search": null,
+      "max_input_tokens": 1000000,
+      "max_output_tokens": null,
+      "free": false,
+      "pricing": {
+        "prompt": [
+          {
+            "until": 256000,
+            "price": "0.00000025"
+          },
+          {
+            "until": null,
+            "price": "0.000001"
+          }
+        ],
+        "completion": [
+          {
+            "until": 256000,
+            "price": "0.0000015"
+          },
+          {
+            "until": null,
+            "price": "0.000004"
+          }
+        ]
+      },
+      "input_modalities": [
+        "text",
+        "image",
+        "video"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "supported_parameters": [
+        "tools",
+        "tool_choice"
+      ],
+      "description": "Qwen3.6 Flash - multimodal (texto+imagem+video), barato, preco por faixa."
+    },
+    {
+      "provider": "qwen",
+      "model_id": "qwen3.6-max-preview",
+      "label": "Qwen3.6 Max Preview — Singapura",
+      "supports_vision": false,
+      "supports_video": false,
+      "supports_tools": true,
+      "supports_streaming": true,
+      "supports_streaming_tools": true,
+      "supports_reasoning": true,
+      "reasoning_modes": null,
+      "supports_structured_output": null,
+      "supports_documents": false,
+      "supports_native_search": null,
+      "max_input_tokens": 262144,
+      "max_output_tokens": null,
+      "free": false,
+      "pricing": {
+        "prompt": [
+          {
+            "until": 128000,
+            "price": "0.0000013"
+          },
+          {
+            "until": null,
+            "price": "0.000002"
+          }
+        ],
+        "completion": [
+          {
+            "until": 128000,
+            "price": "0.0000078"
+          },
+          {
+            "until": null,
+            "price": "0.000012"
+          }
+        ]
+      },
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "supported_parameters": [
+        "tools",
+        "tool_choice"
+      ],
+      "description": "Qwen3.6 Max Preview - sera substituido por qwen3.7-max (deprec. out/2026)."
+    },
+    {
+      "provider": "qwen",
+      "model_id": "qwen3.6-plus",
+      "label": "Qwen3.6 Plus — Singapura",
+      "supports_vision": true,
+      "supports_video": null,
+      "supports_tools": true,
+      "supports_streaming": true,
+      "supports_streaming_tools": true,
+      "supports_reasoning": true,
+      "reasoning_modes": null,
+      "supports_structured_output": null,
+      "supports_documents": false,
+      "supports_native_search": null,
+      "max_input_tokens": 1000000,
+      "max_output_tokens": null,
+      "free": false,
+      "pricing": {
+        "prompt": [
+          {
+            "until": 256000,
+            "price": "0.0000005"
+          },
+          {
+            "until": null,
+            "price": "0.000002"
+          }
+        ],
+        "completion": [
+          {
+            "until": 256000,
+            "price": "0.000003"
+          },
+          {
+            "until": null,
+            "price": "0.000006"
+          }
+        ]
+      },
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "supported_parameters": [
+        "tools",
+        "tool_choice"
+      ],
+      "description": "Qwen3.6 Plus - visao multimodal, preco por faixa."
+    },
+    {
+      "provider": "qwen",
+      "model_id": "qwen3.7-flash",
+      "label": "Qwen3.7 Flash — Virgínia e Singapura",
+      "supports_vision": true,
+      "supports_video": true,
+      "supports_tools": true,
+      "supports_streaming": true,
+      "supports_streaming_tools": null,
+      "supports_reasoning": true,
+      "reasoning_modes": null,
+      "supports_structured_output": true,
+      "supports_documents": false,
+      "supports_native_search": true,
+      "max_input_tokens": 1000000,
+      "max_output_tokens": 65536,
+      "free": false,
+      "pricing": {
+        "prompt": [
+          {
+            "until": 32000,
+            "price": "0.00000003"
+          },
+          {
+            "until": 256000,
+            "price": "0.0000001"
+          },
+          {
+            "until": null,
+            "price": "0.0000002"
+          }
+        ],
+        "completion": [
+          {
+            "until": 32000,
+            "price": "0.00000013"
+          },
+          {
+            "until": 256000,
+            "price": "0.0000004"
+          },
+          {
+            "until": null,
+            "price": "0.0000008"
+          }
+        ]
+      },
+      "input_modalities": [
+        "text",
+        "image",
+        "video"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "supported_parameters": [
+        "tools",
+        "tool_choice",
+        "response_format"
+      ],
+      "description": "Qwen3.7 Flash - multimodal (texto+imagem+video), 1M contexto, function calling, web search, structured output, thinking mode. Preco por faixa."
+    },
+    {
+      "provider": "qwen",
+      "model_id": "qwen3.7-max",
+      "label": "Qwen3.7 Max — Virgínia e Singapura",
+      "supports_vision": false,
+      "supports_video": false,
+      "supports_tools": true,
+      "supports_streaming": true,
+      "supports_streaming_tools": true,
+      "supports_reasoning": true,
+      "reasoning_modes": null,
+      "supports_structured_output": null,
+      "supports_documents": false,
+      "supports_native_search": true,
+      "max_input_tokens": 1000000,
+      "max_output_tokens": 65536,
+      "free": false,
+      "pricing": {
+        "prompt": [
+          {
+            "until": null,
+            "price": "0.0000025"
+          }
+        ],
+        "completion": [
+          {
+            "until": null,
+            "price": "0.0000075"
+          }
+        ]
+      },
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "supported_parameters": [
+        "tools",
+        "tool_choice"
+      ],
+      "description": "Qwen3.7 Max - texto-only (snapshot 2026-06-08 ganha visao), function calling, web search."
+    },
+    {
+      "provider": "qwen",
+      "model_id": "qwen3.7-plus",
+      "label": "Qwen3.7 Plus — Virgínia e Singapura",
+      "supports_vision": true,
+      "supports_video": true,
+      "supports_tools": true,
+      "supports_streaming": true,
+      "supports_streaming_tools": true,
+      "supports_reasoning": true,
+      "reasoning_modes": null,
+      "supports_structured_output": null,
+      "supports_documents": false,
+      "supports_native_search": null,
+      "max_input_tokens": 1000000,
+      "max_output_tokens": null,
+      "free": false,
+      "pricing": {
+        "prompt": [
+          {
+            "until": 256000,
+            "price": "0.0000004"
+          },
+          {
+            "until": null,
+            "price": "0.0000012"
+          }
+        ],
+        "completion": [
+          {
+            "until": 256000,
+            "price": "0.0000016"
+          },
+          {
+            "until": null,
+            "price": "0.0000048"
+          }
+        ]
+      },
+      "input_modalities": [
+        "text",
+        "image",
+        "video"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "supported_parameters": [
+        "tools",
+        "tool_choice"
+      ],
+      "description": "Qwen3.7 Plus - multimodal (texto+imagem+video), 1M contexto, preco por faixa."
+    },
+    {
+      "provider": "qwen",
+      "model_id": "qwen3.8-flash",
+      "label": "Qwen3.8 Flash — Singapura",
+      "supports_vision": true,
+      "supports_video": true,
+      "supports_tools": true,
+      "supports_streaming": true,
+      "supports_streaming_tools": null,
+      "supports_reasoning": true,
+      "reasoning_modes": null,
+      "supports_structured_output": null,
+      "supports_documents": true,
+      "supports_native_search": null,
+      "max_input_tokens": 1000000,
+      "max_output_tokens": null,
+      "free": false,
+      "pricing": null,
+      "input_modalities": [
+        "text",
+        "image",
+        "video"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "supported_parameters": [
+        "tools",
+        "tool_choice"
+      ],
+      "description": "Qwen3.8 Flash disponível em Singapura; multimodal, 1M de contexto."
+    },
+    {
+      "provider": "qwen",
+      "model_id": "qwen3.8-max",
+      "label": "Qwen3.8 Max — Virgínia e Singapura",
+      "supports_vision": false,
+      "supports_video": false,
+      "supports_tools": true,
+      "supports_streaming": true,
+      "supports_streaming_tools": null,
+      "supports_reasoning": true,
+      "reasoning_modes": null,
+      "supports_structured_output": null,
+      "supports_documents": false,
+      "supports_native_search": null,
+      "max_input_tokens": 1000000,
+      "max_output_tokens": null,
+      "free": false,
+      "pricing": {
+        "prompt": [
+          {
+            "until": null,
+            "price": "0.0000025"
+          }
+        ],
+        "completion": [
+          {
+            "until": null,
+            "price": "0.0000075"
+          }
+        ]
+      },
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "supported_parameters": [
+        "tools",
+        "tool_choice"
+      ],
+      "description": "Qwen3.8 Max - flagship texto, 1M contexto, sem visao."
+    },
+    {
+      "provider": "qwen",
+      "model_id": "text-embedding-v4",
+      "label": "Text Embedding V4",
+      "model_domain": "embedding",
+      "supports_vision": false,
+      "supports_video": false,
+      "supports_tools": false,
+      "supports_streaming": false,
+      "supports_streaming_tools": null,
+      "supports_reasoning": null,
+      "reasoning_modes": null,
+      "supports_structured_output": false,
+      "supports_documents": false,
+      "supports_native_search": false,
+      "max_input_tokens": null,
+      "max_output_tokens": null,
+      "free": null,
+      "pricing": {
+        "prompt": "0.00000007",
+        "completion": "0"
+      },
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "supported_parameters": [],
+      "description": "Text Embedding V4 - embeddings de texto (saida gratis)."
+    },
+    {
+      "provider": "qwen",
+      "model_id": "tongyi-embedding-vision-plus",
+      "label": "Tongyi Embedding Vision Plus",
+      "model_domain": "embedding",
+      "supports_vision": true,
+      "supports_video": true,
+      "supports_tools": false,
+      "supports_streaming": false,
+      "supports_streaming_tools": null,
+      "supports_reasoning": null,
+      "reasoning_modes": null,
+      "supports_structured_output": false,
+      "supports_documents": false,
+      "supports_native_search": false,
+      "max_input_tokens": null,
+      "max_output_tokens": null,
+      "free": null,
+      "pricing": {
+        "prompt": "0.00000009",
+        "completion": "0"
+      },
+      "input_modalities": [
+        "text",
+        "image",
+        "video"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "supported_parameters": [],
+      "description": "Tongyi Embedding Vision Plus - embeddings multimodais (imagem/video)."
+    }
+  ]
+}

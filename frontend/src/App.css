@@ -1,0 +1,307 @@
+@import "tailwindcss";
+@plugin "@tailwindcss/typography";
+
+:root {
+  /* Base theme: dark neutral surfaces with one restrained action accent.
+   * Opacity/blur/secondary/gradient are live-controlled from Personalização
+   * via theme.ts → CSS variables (never hardcode fixed alphas on panels). */
+  --bg-opacity: 1;
+  --bg-blur: 24px;
+  --bg-darkest-rgb: 6, 6, 9;
+  --bg-darkest: rgba(var(--bg-darkest-rgb), var(--bg-opacity));
+  --bg-dark: rgb(3, 3, 4);
+  /* Sidebar/main shells: track tone + opacity so the transparency slider works. */
+  --bg-sidebar: rgba(var(--bg-darkest-rgb), calc(var(--bg-opacity) * 0.92));
+  --border-strong: rgba(148, 163, 184, 0.14);
+  --border-glow: rgba(148, 163, 184, 0.28);
+
+  --purple-neon: #c084fc;
+  --purple-glow: #a855f7;
+  --purple-dark: rgba(100, 116, 139, 0.12);
+
+  --cyan-neon: #22d3ee;
+  --blue-neon: #3b82f6;
+  --red-neon: #ef4444;
+
+  --text-primary: #f8fafc;
+  --text-secondary: #cbd5e1;
+  --text-muted: #64748b;
+
+  /* ===== Tokens semânticos da marca Hana (Entrega 1) ===================== *
+   * Use SEMPRE estes em vez de cores cruas (text-cyan-300, pink-500, #050608).
+   * Nomeados por FUNÇÃO, não por cor — assim o seletor de tema muda tudo junto. */
+
+  /* Acentos (seguem o tema escolhido na Personalização) */
+  --accent: var(--purple-neon);
+  --accent-2: var(--cyan-neon);
+
+  /* Secondary surface + highlight gradient (Personalização pickers) */
+  --secondary: #1a1b22;
+  --secondary-rgb: 26, 27, 34;
+  --gradient-start: var(--purple-neon);
+  --gradient-end: var(--cyan-neon);
+  --gradient-angle: 135deg;
+  --theme-saturation: 1;
+  --theme-brightness: 1;
+
+  /* Cores semânticas */
+  --success: #34d399;
+  --warning: #fbbf24;
+  --danger: #f87171;
+  --info: var(--cyan-neon);
+
+  /* Superfícies (camadas de fundo, do mais fundo ao mais alto) */
+  --surface-0: rgba(var(--bg-darkest-rgb), 0.0);   /* transparente sobre o fundo */
+  --surface-1: rgba(var(--secondary-rgb), calc(var(--bg-opacity) * 0.78));
+  --surface-2: rgba(255, 255, 255, 0.04);          /* sub-bloco / input */
+  --surface-3: rgba(255, 255, 255, 0.08);          /* hover / destaque */
+
+  /* Highlight gradient used by primary buttons / titles */
+  --accent-gradient: linear-gradient(
+    var(--gradient-angle),
+    var(--gradient-start),
+    var(--gradient-end)
+  );
+
+  /* Raio e espaçamento padrão */
+  --radius-card: 1rem;       /* 16px - cards */
+  --radius-control: 0.5rem;  /* 8px - botões/inputs/pills */
+  --space-card: 1.5rem;      /* padding interno padrão de card */
+
+  /* Elevação */
+  --elev-card: 0 14px 36px rgba(0, 0, 0, 0.58);
+}
+
+/* Glass panels: opacity from --bg-* vars + live blur from Personalização. */
+.hana-glass {
+  backdrop-filter: blur(var(--bg-blur));
+  -webkit-backdrop-filter: blur(var(--bg-blur));
+}
+
+:root {
+  /* Fonte controlada pela Acessibilidade (Personalização). Padrão = Inter. */
+  --acc-font: 'Inter', 'Segoe UI', sans-serif;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  /* Background agora fica a cargo do CyberBackground.tsx para efeitos 3D, mas mantemos fallback aqui */
+  background-color: var(--bg-darkest);
+  color: var(--text-primary);
+  font-family: var(--acc-font);
+  overflow: hidden;
+}
+
+/* ===== Acessibilidade (dislexia / TDAH) =================================== */
+
+/* Leitura espaçada: mais respiro entre letras e linhas ajuda na dislexia. */
+.acc-spacing body,
+.acc-spacing p,
+.acc-spacing span,
+.acc-spacing li,
+.acc-spacing td,
+.acc-spacing label,
+.acc-spacing input,
+.acc-spacing textarea,
+.acc-spacing button {
+  letter-spacing: 0.04em !important;
+  word-spacing: 0.12em !important;
+  line-height: 1.7 !important;
+}
+
+/* Menos animação: corta animações/transições e as partículas do fundo.
+   Reduz distração (TDAH) e poupa a máquina fraca. */
+.acc-reduce-motion *,
+.acc-reduce-motion *::before,
+.acc-reduce-motion *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+}
+.acc-reduce-motion canvas {
+  display: none !important;
+}
+
+/* Modo foco: esconde orbes de brilho decorativos (divs com blur-[NNpx]) e
+   suaviza sombras neon, deixando só o conteúdo. */
+.acc-focus div[class*="blur-["] {
+  display: none !important;
+}
+.acc-focus * {
+  text-shadow: none !important;
+}
+
+/* Alto contraste: fundo preto puro + texto branco, sem transparências */
+.acc-high-contrast body {
+  background-color: #000 !important;
+}
+.acc-high-contrast .hana-glass {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+.acc-high-contrast * {
+  color: #fff !important;
+  text-shadow: none !important;
+}
+.acc-high-contrast [class*="bg-["] {
+  background-color: #000 !important;
+  background-image: none !important;
+}
+.acc-high-contrast [class*="border-"] {
+  border-color: #444 !important;
+}
+
+/* Cursor grande — mais visível para TDAH/baixa visão */
+.acc-big-cursor,
+.acc-big-cursor * {
+  cursor: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32'><circle cx='16' cy='16' r='8' fill='white' stroke='black' stroke-width='2'/></svg>") 16 16, auto !important;
+}
+
+/* Highlight de linha — destaque sutil onde o mouse está (ajuda TDAH) */
+.acc-line-focus p:hover,
+.acc-line-focus li:hover,
+.acc-line-focus td:hover,
+.acc-line-focus label:hover {
+  background-color: rgba(255, 255, 255, 0.04) !important;
+  border-radius: 2px;
+}
+
+/* Parágrafo curto — largura máxima de ~65 caracteres */
+.acc-narrow-text p,
+.acc-narrow-text li,
+.acc-narrow-text .prose {
+  max-width: 65ch !important;
+}
+
+/* Sem itálico — força font-style normal (itálico é + difícil p/ disléxicos) */
+.acc-no-italic em,
+.acc-no-italic i,
+.acc-no-italic cite,
+.acc-no-italic address,
+.acc-no-italic dfn {
+  font-style: normal !important;
+}
+
+/* OpenDyslexic font face — carregada do CDN */
+@font-face {
+  font-family: 'OpenDyslexic';
+  src: url('https://cdn.jsdelivr.net/npm/open-dyslexic@1.0.3/woff/OpenDyslexic-Regular.woff') format('woff');
+  font-weight: normal;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'OpenDyslexicAlta';
+  src: url('https://cdn.jsdelivr.net/npm/open-dyslexic@1.0.3/woff/OpenDyslexicAlta-Regular.woff') format('woff');
+  font-weight: normal;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* Native <select> dropdowns: force dark rendering so the option list isn't the
+   ugly gray-on-gray default. Cheap global polish (no custom component needed). */
+:root {
+  color-scheme: dark;
+}
+select option {
+  background-color: #0f0f13;
+  color: var(--text-secondary);
+}
+select option:checked {
+  background-color: var(--purple-dark);
+  color: var(--text-primary);
+}
+
+/* Efeito Glow para Cards e Botões */
+.glow-border {
+  position: relative;
+}
+.glow-border::before {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(45deg, var(--purple-neon), var(--cyan-neon), transparent);
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  opacity: 0.3;
+  transition: opacity 0.3s ease;
+}
+.glow-border:hover::before {
+  opacity: 1;
+}
+
+/* Animações CSS Globais */
+@keyframes fadeInSlideUp {
+  from { opacity: 0; transform: translateY(15px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-fade-in {
+  animation: fadeInSlideUp 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* Troca de aba: SO opacidade, sem deslizar. O slide de 15px do fadeInSlideUp
+   e aceitavel numa mensagem que chega, mas na tela inteira mudando de aba vira
+   movimento demais — cansa a vista de quem tem sensibilidade visual. */
+@keyframes fadeInOnly {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.animate-tab-in {
+  animation: fadeInOnly 0.22s ease-out forwards;
+}
+
+/* Acessibilidade: quem liga "reduzir movimento" no Windows/SO nao recebe
+   animacao nenhuma. Movimento repetido dispara enxaqueca e desconforto visual;
+   isso e baseline, nao enfeite. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+@keyframes pulse-glow {
+  0%, 100% { box-shadow: 0 0 15px var(--purple-dark); }
+  50% { box-shadow: 0 0 30px rgba(168, 85, 247, 0.4); }
+}
+
+.hover-glow:hover {
+  animation: pulse-glow 2s infinite ease-in-out;
+}
+
+@keyframes blink-cursor {
+  0%, 50% { opacity: 1; }
+  50.01%, 100% { opacity: 0; }
+}
+
+@keyframes spin-slow {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+.animate-spin-slow {
+  animation: spin-slow 3s linear infinite;
+}
+
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+}
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background-color: var(--border-strong);
+  border-radius: 10px;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background-color: var(--text-muted);
+}
